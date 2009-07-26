@@ -107,7 +107,7 @@ public abstract class CDBrowserTableDataSource extends CDController {
                 });
             }
             log.warn("No cached listing for " + path.getName());
-            return new AttributedList<Path>(Collections.<Path>emptyList());
+            return path.cache().get(path, controller.getComparator(), controller.getFileFilter());
         }
     }
 
