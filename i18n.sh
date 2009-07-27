@@ -16,7 +16,7 @@
 
 #!/bin/bash
 
-nibtool="/Xcode2.5/usr/bin/nibtool"
+nibtool="nibtool"
 base_language="en.lproj"
 
 usage() {
