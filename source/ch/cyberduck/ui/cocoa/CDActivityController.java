@@ -18,22 +18,21 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.*;
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSNotification;
-import com.apple.cocoa.foundation.NSSelector;
-
 import ch.cyberduck.core.AbstractCollectionListener;
-import ch.cyberduck.ui.cocoa.threading.BackgroundAction;
-import ch.cyberduck.ui.cocoa.threading.BackgroundActionRegistry;
+import ch.cyberduck.core.i18n.Locale;
+import ch.cyberduck.core.threading.BackgroundAction;
+import ch.cyberduck.core.threading.BackgroundActionRegistry;
+import ch.cyberduck.ui.cocoa.application.*;
+import ch.cyberduck.ui.cocoa.foundation.NSNotification;
+import ch.cyberduck.ui.cocoa.foundation.NSObject;
 import ch.cyberduck.ui.cocoa.threading.WindowMainAction;
 
 import org.apache.log4j.Logger;
+import org.rococoa.ID;
+import org.rococoa.Rococoa;
+import org.rococoa.cocoa.foundation.NSInteger;
 
-import java.util.Collection;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.*;
 
 /**
  * @version $Id$
@@ -41,7 +40,7 @@ import java.util.Map;
 public class CDActivityController extends CDWindowController {
     private static Logger log = Logger.getLogger(CDActivityController.class);
 
-    private static CDActivityController instance;
+    private static CDActivityController instance = null;
 
     public static CDActivityController instance() {
         synchronized(NSApplication.sharedApplication()) {
@@ -61,25 +60,36 @@ public class CDActivityController extends CDWindowController {
         this.init();
     }
 
+    @Override
+    protected void invalidate() {
+        BackgroundActionRegistry.instance().removeListener(backgroundActionListener);
+        table.setDataSource(null);
+        table.setDelegate(null);
+        super.invalidate();
+    }
+
     private final AbstractCollectionListener<BackgroundAction> backgroundActionListener = new AbstractCollectionListener<BackgroundAction>() {
+        @Override
         public void collectionItemAdded(final BackgroundAction action) {
-            CDMainApplication.invoke(new WindowMainAction(CDActivityController.this) {
+            invoke(new WindowMainAction(CDActivityController.this) {
                 public void run() {
-                    log.debug("collectionItemAdded" + action);
+                    log.debug("collectionItemAdded:" + action);
                     tasks.put(action, new CDTaskController(action));
                     reload();
                 }
             });
         }
 
+        @Override
         public void collectionItemRemoved(final BackgroundAction action) {
-            CDMainApplication.invoke(new WindowMainAction(CDActivityController.this) {
+            invoke(new WindowMainAction(CDActivityController.this) {
                 public void run() {
-                    log.debug("collectionItemRemoved" + action);
+                    log.debug("collectionItemRemoved:" + action);
                     final CDTaskController controller = tasks.remove(action);
-                    if (controller != null) {
-                        controller.invalidate();
+                    if(null == controller) {
+                        return;
                     }
+                    controller.invalidate();
                     reload();
                 }
             });
@@ -97,107 +107,111 @@ public class CDActivityController extends CDWindowController {
         this.reload();
     }
 
+    /**
+     *
+     */
     private void reload() {
-        while(table.subviews().count() > 0) {
-            ((NSView) table.subviews().lastObject()).removeFromSuperviewWithoutNeedingDisplay();
+        while(table.subviews().count().intValue() > 0) {
+            (Rococoa.cast(table.subviews().lastObject(), NSView.class)).removeFromSuperviewWithoutNeedingDisplay();
         }
         table.reloadData();
     }
 
+    @Override
     public void setWindow(NSWindow window) {
-        this.window = window;
-        this.window.setReleasedWhenClosed(false);
-        this.window.setDelegate(this);
-        this.window.setTitle(NSBundle.localizedString("Activity", ""));
+        window.setTitle(Locale.localizedString("Activity"));
+        super.setWindow(window);
     }
 
-    protected void invalidate() {
-        BackgroundActionRegistry.instance().removeListener(backgroundActionListener);
-        super.invalidate();
-        instance = null;
+    @Override
+    public boolean isSingleton() {
+        return true;
     }
 
+    private final TableColumnFactory tableColumnsFactory = new TableColumnFactory();
+
+    private static class TableColumnFactory extends HashMap<String,NSTableColumn> {
+        private NSTableColumn create(String identifier) {
+            if(!this.containsKey(identifier)) {
+                this.put(identifier, NSTableColumn.tableColumnWithIdentifier(identifier));
+            }
+            return this.get(identifier);
+        }
+    }
+
+    @Outlet
     private NSTableView table;
+    private CDListDataSource model;
     private CDAbstractTableDelegate<CDTaskController> delegate;
 
     public void setTable(NSTableView table) {
         this.table = table;
-        this.table.setDataSource(this);
-        this.table.setDelegate(this.delegate = new CDAbstractTableDelegate<CDTaskController>() {
+        this.table.setDataSource((model = new CDListDataSource() {
+            /**
+             * @param view
+             */
+            public NSInteger numberOfRowsInTableView(NSTableView view) {
+                return new NSInteger(tasks.size());
+            }
+
+            /**
+             * @param view
+             * @param tableColumn
+             * @param row
+             */
+            public NSObject tableView_objectValueForTableColumn_row(NSTableView view, NSTableColumn tableColumn, NSInteger row) {
+                return null;
+            }
+        }).id());
+        this.table.setDelegate((delegate = new CDAbstractTableDelegate<CDTaskController>() {
+            public void enterKeyPressed(final ID sender) {
+            }
+
+            public void deleteKeyPressed(final ID sender) {
+            }
+
             public String tooltip(CDTaskController c) {
                 return null;
             }
 
-            public boolean tableViewShouldSelectRow(NSTableView view, int row) {
+            @Override
+            public boolean tableView_shouldSelectRow(NSTableView view, int row) {
                 return false;
             }
 
+            @Override
             public void tableColumnClicked(NSTableView view, NSTableColumn tableColumn) {
-
             }
 
-            public void tableRowDoubleClicked(Object sender) {
-
+            @Override
+            public void tableRowDoubleClicked(final ID sender) {
             }
 
+            @Override
             public void selectionDidChange(NSNotification notification) {
-
             }
 
-            public void enterKeyPressed(Object sender) {
-
+            public void tableView_willDisplayCell_forTableColumn_row(NSTableView view, NSCell cell, NSTableColumn tableColumn, NSInteger row) {
+                final Collection<CDTaskController> values = tasks.values();
+                int size = values.size();
+                Rococoa.cast(cell, CDControllerCell.class).setView(values.toArray(new CDTaskController[size])[size - 1 - row.intValue()].view());
             }
-
-            public void deleteKeyPressed(Object sender) {
-
-            }
-        });
-        NSSelector setResizableMaskSelector
-                = new NSSelector("setResizingMask", new Class[]{int.class});
+        }).id());
         {
-            NSTableColumn c = new NSTableColumn();
+            NSTableColumn c = tableColumnsFactory.create("Default");
             c.setMinWidth(80f);
             c.setWidth(300f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
-            c.setDataCell(new CDControllerCell());
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask);
+            c.setDataCell(prototype);
             this.table.addTableColumn(c);
         }
         this.table.sizeToFit();
     }
 
-    public void awakeFromNib() {
-        ;
-    }
+    private final NSCell prototype = CDControllerCell.controllerCell();
 
+    @Override
     protected String getBundleName() {
         return "Activity";
-    }
-
-    /**
-     * @param view
-     */
-    public int numberOfRowsInTableView(NSTableView view) {
-        synchronized(tasks) {
-            return tasks.size();
-        }
-    }
-
-    /**
-     * @param view
-     * @param tableColumn
-     * @param row
-     */
-    public Object tableViewObjectValueForLocation(NSTableView view, NSTableColumn tableColumn, int row) {
-        if(row < this.numberOfRowsInTableView(view)) {
-            final Collection<CDTaskController> values = tasks.values();
-            return values.toArray(new CDTaskController[values.size()])[row];
-        }
-        log.warn("tableViewObjectValueForLocation:" + row + " == null");
-        return null;
     }
 }

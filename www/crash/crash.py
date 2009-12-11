@@ -1,4 +1,5 @@
-#!/usr/local/bin/python
+#!/usr/bin/env python2.6
+# -*- coding: utf-8 -*-
 
 import cgi
 import os
@@ -19,23 +20,42 @@ logging.basicConfig(level=logging.DEBUG,
 #create table crash(ip TEXT, crashlog TEXT);
 db = 'crash.sqlite'
 
+def mailreport(crashlog, ip, revision):
+	mail = MIMEText(crashlog)
+	mail["To"] = "bugs@cyberduck.ch"
+	mail["From"] = "noreply@cyberduck.ch"
+	if revision:
+		mail["Subject"] = "Cyberduck Crash Report (r" + revision + ") from " + ip
+	else:
+		mail["Subject"] = "Cyberduck Crash Report from " + ip
+	mail["Date"] = email.Utils.formatdate(localtime=1)
+	mail["Message-ID"] = email.Utils.make_msgid()
+	s = smtplib.SMTP()
+	s.connect("localhost")
+	s.sendmail("noreply@cyberduck.ch", "bugs@cyberduck.ch", mail.as_string())
+	s.quit()
+
+
 if __name__=="__main__":
 	print "Content-type: text/html"
 	print
 	try:
 		form = cgi.FieldStorage()
+		revision = None
+		if form.has_key("revision"):
+			revision = form["revision"].value
+		ip = cgi.escape(os.environ["REMOTE_ADDR"])
 		if form.has_key("crashlog"):
+			logging.info("Crash Report from %s for revision %s", ip, revision)
 			crashlog = form["crashlog"].value
-			ip = cgi.escape(os.environ["REMOTE_ADDR"])
-			logging.info("Crash Report from %s", ip)
 
 			#add database entry
 			conn = sqlite3.connect(db)
 			c = conn.cursor()
 
-			row = (ip, crashlog)
+			row = (ip, crashlog, revision)
 			try:
-				c.execute('insert into crash values(?,?)', row)
+				c.execute('insert into crash values(?,?,?)', row)
 			except sqlite3.IntegrityError, (ErrorMessage):
 				logging.error('Error adding crashlog from IP %s:%s', ip, ErrorMessage)
 				pass
@@ -46,16 +66,8 @@ if __name__=="__main__":
 				c.close()
 
 			#send mail
-			mail = MIMEText(crashlog)
-			mail["To"] = "bugs@cyberduck.ch"
-			mail["From"] = "noreply@cyberduck.ch"
-			mail["Subject"] = "Cyberduck Crash Report from " + ip
-			mail["Date"] = email.Utils.formatdate(localtime=1)
-			mail["Message-ID"] = email.Utils.make_msgid()
-			s = smtplib.SMTP()
-			s.connect("localhost")
-			s.sendmail("noreply@cyberduck.ch", "bugs@cyberduck.ch", mail.as_string())
-			s.quit()
+			if revision:
+				mailreport(crashlog, ip, revision)
 	except:
 		logging.error("Unexpected error:".join(format_exception(*exc_info())))
 		cgi.print_exception()

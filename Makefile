@@ -1,5 +1,5 @@
 BUILD_DIR=build
-DEFAULT_BUILDSTYLE=Deployment
+DEFAULT_BUILDSTYLE=Release
 
 BUILDSTYLE=$(DEFAULT_BUILDSTYLE)
 
@@ -13,6 +13,11 @@ release:
 	cd Spotlight\ Importer; make release
 	cd Dashboard\ Widget; make release
 	xcodebuild -project $(PROJECT) -target release -configuration $(BUILDSTYLE)
+
+beta:
+	cd Spotlight\ Importer; make release
+	cd Dashboard\ Widget; make release
+	xcodebuild -project $(PROJECT) -target beta -configuration $(BUILDSTYLE)
 
 nightly:
 	cd Spotlight\ Importer; make release

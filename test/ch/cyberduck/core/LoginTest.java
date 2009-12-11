@@ -18,87 +18,60 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import junit.framework.TestCase;
-
 /**
  * @version $Id$
  */
-public class LoginTest extends TestCase {
-	
-	static {
-		org.apache.log4j.BasicConfigurator.configure();
-	}
-	
-	public LoginTest(String name) {
-		super(name);
-	}
-	
-	public void testLoginReasonable() {
-		try {
-			Credentials credentials = new Credentials("guest",
-									"changeme");
-			assertTrue(credentials.isValid());
-		}
-		catch(java.lang.UnsatisfiedLinkError e) {}
-	}
-	
-	public void testLoginWithoutUsername() {
-		try {
-            Credentials credentials = new Credentials(null,
-									Preferences.instance().getProperty("connection.login.anon.pass"));
-			assertFalse(credentials.isValid());
-		}
-		catch(java.lang.UnsatisfiedLinkError e) {}
-	}
-	
-	public void testLoginWithoutPass() {
-		try {
-            Credentials credentials = new Credentials("guest",
-									null);
-			assertFalse(credentials.isValid());
-		}
-		catch(java.lang.UnsatisfiedLinkError e) {}
-	}
+public class LoginTest extends AbstractTestCase {
+
+    static {
+        org.apache.log4j.BasicConfigurator.configure();
+    }
+
+    public LoginTest(String name) {
+        super(name);
+    }
+
+    public void testLoginReasonable() {
+        Credentials credentials = new Credentials("guest", "changeme");
+        assertTrue(credentials.isValid());
+    }
+
+    public void testLoginWithoutUsername() {
+        Credentials credentials = new Credentials(null,
+                Preferences.instance().getProperty("connection.login.anon.pass"));
+        assertFalse(credentials.isValid());
+    }
+
+    public void testLoginWithoutPass() {
+        Credentials credentials = new Credentials("guest", null);
+        assertFalse(credentials.isValid());
+    }
 
     public void testLoginWithoutEmptyPass() {
-        try {
-            Credentials credentials = new Credentials("guest",
-                                    "");
-            assertTrue(credentials.isValid());
-        }
-        catch(java.lang.UnsatisfiedLinkError e) {}
+        Credentials credentials = new Credentials("guest", "");
+        assertTrue(credentials.isValid());
     }
 
     public void testLoginAnonymous1() {
-		try {
-            Credentials credentials = new Credentials(Preferences.instance().getProperty("connection.login.anon.name"),
-									Preferences.instance().getProperty("connection.login.anon.pass"));
-			assertTrue(credentials.isValid());
-		}
-		catch(java.lang.UnsatisfiedLinkError e) {}
-	}
-	
-	public void testLoginAnonymous2() {
-		try {
-            Credentials credentials = new Credentials(Preferences.instance().getProperty("connection.login.anon.name"),
-									null);
-			assertTrue(credentials.isValid());
-		}
-		catch(java.lang.UnsatisfiedLinkError e) {}
-	}
+        Credentials credentials = new Credentials(Preferences.instance().getProperty("connection.login.anon.name"),
+                Preferences.instance().getProperty("connection.login.anon.pass"));
+        assertTrue(credentials.isValid());
+    }
+
+    public void testLoginAnonymous2() {
+        Credentials credentials = new Credentials(Preferences.instance().getProperty("connection.login.anon.name"),
+                null);
+        assertTrue(credentials.isValid());
+    }
 
     /**
      * http://trac.cyberduck.ch/ticket/1204
      */
     public void testLogin1204() {
-        try {
-            Credentials credentials = new Credentials("cyberduck.login",
-                                    "1seCret");
-            assertTrue(credentials.isValid());
-            assertEquals("cyberduck.login", credentials.getUsername());
-            assertEquals("1seCret", credentials.getPassword());
-
-        }
-        catch(java.lang.UnsatisfiedLinkError e) {}
+        Credentials credentials = new Credentials("cyberduck.login",
+                "1seCret");
+        assertTrue(credentials.isValid());
+        assertEquals("cyberduck.login", credentials.getUsername());
+        assertEquals("1seCret", credentials.getPassword());
     }
 }

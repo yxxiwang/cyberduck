@@ -1,7 +1,7 @@
 package ch.cyberduck.core;
 
 /*
- *  Copyright (c) 2008 David Kocher. All rights reserved.
+ * Copyright (c) 2009 David Kocher. All rights reserved.
  *  http://cyberduck.ch/
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -18,14 +18,20 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSDictionary;
-import com.apple.cocoa.foundation.NSMutableDictionary;
-
 /**
  * @version $Id$
  */
-public interface Serializable extends java.io.Serializable {
-    void init(NSDictionary dict);
+public interface Serializable {
 
-    NSDictionary getAsDictionary();
+    /**
+     * @param <T> The serialized object type
+     * @return
+     */
+    <T> T getAsDictionary();
+
+    /**
+     * @param serialized
+     * @param <T>        The serialized object type
+     */
+    public <T> void init(T serialized);
 }

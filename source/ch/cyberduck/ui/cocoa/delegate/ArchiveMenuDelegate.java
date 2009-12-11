@@ -18,26 +18,34 @@ package ch.cyberduck.ui.cocoa.delegate;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSMenu;
-import com.apple.cocoa.application.NSMenuItem;
-import com.apple.cocoa.foundation.NSSelector;
-
 import ch.cyberduck.core.Archive;
+import ch.cyberduck.ui.cocoa.application.NSMenu;
+import ch.cyberduck.ui.cocoa.application.NSMenuItem;
+
+import org.rococoa.Foundation;
+import org.rococoa.cocoa.foundation.NSInteger;
 
 /**
- * @version $Id:$
+ * @version $Id$
  */
-public class ArchiveMenuDelegate extends MenuDelegate {
+public class ArchiveMenuDelegate extends AbstractMenuDelegate {
 
-    public int numberOfItemsInMenu(NSMenu menu) {
-        return Archive.getKnownArchives().length;
+    public NSInteger numberOfItemsInMenu(NSMenu menu) {
+        return new NSInteger(Archive.getKnownArchives().length);
     }
 
-    public boolean menuUpdateItemAtIndex(NSMenu menu, NSMenuItem item, int index, boolean shouldCancel) {
-        final Archive archive = Archive.getKnownArchives()[index];
-        item.setRepresentedObject(archive);
+    @Override
+    public boolean menuUpdateItemAtIndex(NSMenu menu, NSMenuItem item, NSInteger index, boolean shouldCancel) {
+        if(shouldCancel) {
+            return false;
+        }
+        if(super.shouldSkipValidation(menu, index.intValue())) {
+            return false;
+        }
+        final Archive archive = Archive.getKnownArchives()[index.intValue()];
+        item.setRepresentedObject(archive.getIdentifier());
         item.setTitle(archive.getIdentifier());
-        item.setAction(new NSSelector("archiveMenuClicked", new Class[]{Object.class}));
+        item.setAction(Foundation.selector("archiveMenuClicked:"));
         return !shouldCancel;
     }
 }

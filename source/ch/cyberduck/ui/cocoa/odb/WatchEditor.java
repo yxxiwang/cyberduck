@@ -18,21 +18,28 @@ package ch.cyberduck.ui.cocoa.odb;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSWorkspace;
-import com.apple.cocoa.foundation.NSDictionary;
-
-import ch.cyberduck.ui.cocoa.CDBrowserController;
+import ch.cyberduck.core.Local;
 import ch.cyberduck.core.Path;
+import ch.cyberduck.core.io.FileWatcher;
+import ch.cyberduck.core.io.FileWatcherListener;
+import ch.cyberduck.ui.cocoa.CDBrowserController;
+import ch.cyberduck.ui.cocoa.application.NSWorkspace;
+import ch.cyberduck.ui.cocoa.foundation.NSDictionary;
+import ch.cyberduck.ui.cocoa.foundation.NSEnumerator;
+import ch.cyberduck.ui.cocoa.foundation.NSObject;
 
 import org.apache.log4j.Logger;
+import org.rococoa.Rococoa;
 
-import java.util.Enumeration;
+import java.io.IOException;
 
 /**
- * @version $Id:$
+ * @version $Id$
  */
-public class WatchEditor extends Editor {
+public class WatchEditor extends Editor implements FileWatcherListener {
     private static Logger log = Logger.getLogger(WatchEditor.class);
+
+    private FileWatcher monitor;
 
     /**
      * @param c
@@ -52,34 +59,51 @@ public class WatchEditor extends Editor {
     /**
      * Edit and watch the file for changes
      */
+    @Override
     public void edit() {
-//        edited.getLocal().watch(new AbstractFileWatcherListener() {
-//            public void fileWritten(Local file) {
-//                log.debug("fileWritten:" + file);
-//                save();
-//                if(!isOpen()) {
-//                    delete();
-//                }
-//            }
-//        });
-//        if(null == bundleIdentifier) {
-//            NSWorkspace.sharedWorkspace().openFile(edited.getLocal().getAbsolute());
-//        }
-//        else {
-//            NSWorkspace.sharedWorkspace().openFile(
-//                    edited.getLocal().getAbsolute(),
-//                    NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier(bundleIdentifier)
-//            );
-//        }
+        if(null == bundleIdentifier) {
+            NSWorkspace.sharedWorkspace().openFile(edited.getLocal().getAbsolute());
+        }
+        else {
+            NSWorkspace.sharedWorkspace().openFile(edited.getLocal().getAbsolute(),
+                    NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier(bundleIdentifier));
+        }
+        this.watch();
     }
 
+    private void watch() {
+        monitor = new FileWatcher(edited.getLocal());
+        try {
+            monitor.watch(this);
+        }
+        catch(IOException e) {
+            log.error(e.getMessage());
+        }
+    }
+
+    private void unwatch() {
+        try {
+            monitor.unwatch();
+        }
+        catch(IOException e) {
+            log.error(e.getMessage());
+        }
+    }
+
+    @Override
+    protected void delete() {
+        this.unwatch();
+        super.delete();
+    }
+
+    @Override
     public boolean isOpen() {
         if(null == bundleIdentifier) {
-            final String fullpath = NSWorkspace.sharedWorkspace().applicationForFile(edited.getLocal().getAbsolute());
-
-            final Enumeration apps = NSWorkspace.sharedWorkspace().launchedApplications().objectEnumerator();
-            while(apps.hasMoreElements()) {
-                NSDictionary app = (NSDictionary) apps.nextElement();
+            final String fullpath = edited.getLocal().getDefaultEditor();
+            final NSEnumerator apps = NSWorkspace.sharedWorkspace().launchedApplications().objectEnumerator();
+            NSObject next;
+            while(((next = apps.nextObject()) != null)) {
+                NSDictionary app = Rococoa.cast(next, NSDictionary.class);
                 if(fullpath.equals(app.objectForKey("NSApplicationPath").toString())) {
                     return true;
                 }
@@ -87,5 +111,27 @@ public class WatchEditor extends Editor {
             return false;
         }
         return super.isOpen();
+    }
+
+    @Override
+    protected void setDeferredDelete(boolean deferredDelete) {
+        if(!this.isOpen()) {
+            this.delete();
+        }
+        super.setDeferredDelete(deferredDelete);
+    }
+
+    public void fileWritten(Local file) {
+        log.info("fileWritten:" + file);
+        this.save();
+    }
+
+    public void fileRenamed(Local file) {
+        log.info("fileRenamed:" + file);
+    }
+
+    public void fileDeleted(Local file) {
+        log.info("fileDeleted:" + file);
+        this.unwatch();
     }
 }

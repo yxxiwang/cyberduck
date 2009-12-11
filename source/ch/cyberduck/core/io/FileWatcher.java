@@ -1,7 +1,7 @@
 package ch.cyberduck.core.io;
 
 /*
- *  Copyright (c) 2006 David Kocher. All rights reserved.
+ *  Copyright (c) 2009 David Kocher. All rights reserved.
  *  http://cyberduck.ch/
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -18,108 +18,93 @@ package ch.cyberduck.core.io;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSWorkspace;
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSNotification;
-import com.apple.cocoa.foundation.NSSelector;
-
 import ch.cyberduck.core.Local;
+import ch.cyberduck.core.LocalFactory;
+import ch.cyberduck.ui.cocoa.foundation.NSAutoreleasePool;
 
 import org.apache.log4j.Logger;
 
-import java.util.*;
+import com.barbarysoftware.watchservice.*;
 
+import java.io.File;
+import java.io.IOException;
+
+import static com.barbarysoftware.watchservice.StandardWatchEventKind.*;
+
+/**
+ * @version $Id$
+ */
 public class FileWatcher {
     private static Logger log = Logger.getLogger(FileWatcher.class);
 
-    private static final String UKKQueueFileRenamedNotification = "UKKQueueFileRenamedNotification";
-    private static final String UKKQueueFileWrittenToNotification = "UKKQueueFileWrittenToNotification";
-    private static final String UKKQueueFileDeletedNotification = "UKKQueueFileDeletedNotification";
-
-    /**
-     *
-     */
-    private static final Map<Local, FileWatcher> instances = new HashMap<Local, FileWatcher>();
-
-    static {
-        // Ensure native odb library is loaded
-        try {
-            NSBundle bundle = NSBundle.mainBundle();
-            String lib = bundle.resourcePath() + "/Java/" + "libKQueue.dylib";
-            log.info("Locating libKQueue.dylib at '" + lib + "'");
-            System.load(lib);
-        }
-        catch(UnsatisfiedLinkError e) {
-            log.error("Could not load the libKQueue library:" + e.getMessage());
-            throw e;
-        }
-    }
-
-    public static FileWatcher instance(final Local path) {
-        if(!instances.containsKey(path)) {
-            instances.put(path, new FileWatcher(path));
-        }
-        return instances.get(path);
-    }
-
-    /**
-     * The file to be watched
-     */
+    private WatchService monitor;
     private Local file;
 
-    /**
-     * The listeners to get notified about file system changes
-     */
-    private Set<FileWatcherListener> listeners
-            = Collections.synchronizedSet(new HashSet<FileWatcherListener>());
-
-    /**
-     * 
-     * @param file
-     */
-    private FileWatcher(final Local file) {
+    public FileWatcher(Local file) {
         this.file = file;
+        this.monitor = WatchService.newWatchService();
     }
 
-    public void fileWritten(NSNotification notification) {
-        for(FileWatcherListener listener: listeners) {
-            listener.fileWritten(new Local(notification.userInfo().objectForKey("path").toString()));
-        }
+    public void watch(final FileWatcherListener listener) throws IOException {
+        log.debug("watch:" + file);
+        final WatchableFile watchable = new WatchableFile(new File(file.getParent().getAbsolute()));
+        watchable.register(monitor, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY);
+        final Thread consumer = new Thread(new Runnable() {
+            public void run() {
+                while(true) {
+                    final NSAutoreleasePool pool = NSAutoreleasePool.push();
+                    try {
+                        // wait for key to be signaled
+                        WatchKey key;
+                        try {
+                            key = monitor.take();
+                        }
+                        catch(ClosedWatchServiceException e) {
+                            // If this watch service is closed
+                            return;
+                        }
+                        catch(InterruptedException e) {
+                            return;
+                        }
+                        for(WatchEvent<?> event : key.pollEvents()) {
+                            WatchEvent.Kind<?> kind = event.kind();
+                            log.info("Detected file system event: " + kind);
+                            if(kind == OVERFLOW) {
+                                continue;
+                            }
+                            // The filename is the context of the event.
+                            WatchEvent<File> ev = (WatchEvent<File>) event;
+                            Local f = LocalFactory.createLocal(ev.context());
+                            if(f.equals(file)) {
+                                if(ENTRY_MODIFY == kind) {
+                                    listener.fileWritten(f);
+                                }
+                                if(ENTRY_DELETE == kind) {
+                                    listener.fileDeleted(f);
+                                }
+                            }
+                            else {
+                                log.debug("Ignored file system event for " + f);
+                            }
+                        }
+                        // Reset the key -- this step is critical to receive further watch events.
+                        boolean valid = key.reset();
+                        if(!valid) {
+                            // The key is no longer valid and the loop can exit.
+                            break;
+                        }
+                    }
+                    finally {
+                        pool.release();
+                    }
+                }
+            }
+        });
+        consumer.start();
     }
 
-    public void fileRenamed(NSNotification notification) {
-        for(FileWatcherListener listener: listeners) {
-            listener.fileRenamed(new Local(notification.userInfo().objectForKey("path").toString()));
-        }
+    public void unwatch() throws IOException {
+        log.debug("unwatch:" + file);
+        monitor.close();
     }
-
-    public void fileDeleted(NSNotification notification) {
-        for(FileWatcherListener listener: listeners) {
-            listener.fileDeleted(new Local(notification.userInfo().objectForKey("path").toString()));
-        }
-        removePath(file.getAbsolute());
-    }
-
-    public void watch(final FileWatcherListener listener) {
-        this.listeners.add(listener);
-        NSWorkspace.sharedWorkspace().notificationCenter().addObserver(
-                this,
-                new NSSelector("fileWritten", new Class[]{NSNotification.class}),
-                UKKQueueFileWrittenToNotification,
-                null);
-        NSWorkspace.sharedWorkspace().notificationCenter().addObserver(
-                this,
-                new NSSelector("fileRenamed", new Class[]{NSNotification.class}),
-                UKKQueueFileRenamedNotification,
-                null);
-        NSWorkspace.sharedWorkspace().notificationCenter().addObserver(
-                this, new NSSelector("fileDeleted", new Class[]{NSNotification.class}),
-                UKKQueueFileDeletedNotification,
-                null);
-        this.addPath(file.getAbsolute());
-    }
-
-    private native void addPath(String local);
-
-    private native void removePath(String local);
 }

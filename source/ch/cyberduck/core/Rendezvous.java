@@ -18,36 +18,68 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.dnssd.*;
+import ch.cyberduck.core.i18n.Locale;
+import ch.cyberduck.ui.cocoa.foundation.NSAutoreleasePool;
 
 import org.apache.log4j.Logger;
 
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.util.*;
+import com.apple.dnssd.*;
+
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * @version $Id$
  */
-public class Rendezvous
-        implements BrowseListener, ResolveListener {
-
+public class Rendezvous implements BrowseListener, ResolveListener {
     private static Logger log = Logger.getLogger(Rendezvous.class);
 
-    private static final String SERVICE_TYPE_SFTP = "_sftp._tcp.";
-    private static final String SERVICE_TYPE_SSH = "_ssh._tcp.";
+    /**
+     * sftp-ssh
+     * Secure File Transfer Protocol over SSH
+     * Bryan Cole <bryan.cole at teraview.com>
+     * Protocol description: draft-ietf-secsh-filexfer-13.txt
+     * Defined TXT keys: u=<username> p=<password> path=<path>
+     */
+    private static final String SERVICE_TYPE_SFTP = "_sftp-ssh._tcp.";
+    /**
+     * ftp
+     * File Transfer
+     * Service name originally allocated for Jon Postel <postel at isi.edu>
+     * Now advertised and browsed-for by numerous independent
+     * server and client implementations.
+     * Protocol description: RFC 959
+     * Defined TXT keys: u=<username> p=<password> path=<path>
+     */
     private static final String SERVICE_TYPE_FTP = "_ftp._tcp.";
+    /**
+     * webdav
+     * World Wide Web Distributed Authoring and Versioning (WebDAV)
+     * Y. Y. Goland <yarong at microsoft.com>
+     * Protocol description: RFC 2518
+     * Defined TXT keys: u=<username> p=<password> path=<path>
+     */
     private static final String SERVICE_TYPE_WEBDAV = "_webdav._tcp";
+    /**
+     * webdavs
+     * WebDAV over SSL/TLS
+     * Y. Y. Goland <yarong at microsoft.com>
+     * Protocol description: RFC 2518
+     * Defined TXT keys: u=<username> p=<password> path=<path>
+     */
+    private static final String SERVICE_TYPE_WEBDAV_TLS = "_webdavs._tcp";
 
     private static final String[] serviceTypes = new String[]{
-            SERVICE_TYPE_SFTP, SERVICE_TYPE_SSH, SERVICE_TYPE_FTP, SERVICE_TYPE_WEBDAV
+            SERVICE_TYPE_SFTP, SERVICE_TYPE_FTP, SERVICE_TYPE_WEBDAV, SERVICE_TYPE_WEBDAV_TLS
     };
 
     private Map<String, Host> services;
     private Map<String, DNSSDService> browsers;
 
-    private static Rendezvous instance;
+    private static Rendezvous instance = null;
 
     private static final Object lock = new Object();
 
@@ -62,8 +94,8 @@ public class Rendezvous
 
     private Rendezvous() {
         log.debug("Rendezvous");
-        this.services = new HashMap<String, Host>();
-        this.browsers = new HashMap<String, DNSSDService>();
+        this.services = new ConcurrentHashMap<String, Host>();
+        this.browsers = new ConcurrentHashMap<String, DNSSDService>();
     }
 
     /**
@@ -72,8 +104,7 @@ public class Rendezvous
     public void init() {
         log.debug("init");
         try {
-            for(int i = 0; i < serviceTypes.length; i++) {
-                String protocol = serviceTypes[i];
+            for(String protocol : serviceTypes) {
                 log.info("Adding Rendezvous service listener for " + protocol);
                 this.browsers.put(protocol, DNSSD.browse(protocol, this));
             }
@@ -88,8 +119,7 @@ public class Rendezvous
      * Halt all service discvery browsers
      */
     public void quit() {
-        for(int i = 0; i < serviceTypes.length; i++) {
-            String protocol = serviceTypes[i];
+        for(String protocol : serviceTypes) {
             log.info("Removing Rendezvous service listener for " + protocol);
             DNSSDService service = this.browsers.get(protocol);
             if(null == service) {
@@ -108,8 +138,8 @@ public class Rendezvous
             log.info("Service resolved:" + servicename);
             RendezvousListener[] l = listeners.toArray(
                     new RendezvousListener[listeners.size()]);
-            for(int i = 0; i < l.length; i++) {
-                l[i].serviceResolved(servicename, hostname);
+            for(RendezvousListener listener : l) {
+                listener.serviceResolved(servicename, hostname);
             }
         }
 
@@ -117,8 +147,8 @@ public class Rendezvous
             log.info("Service lost:" + servicename);
             RendezvousListener[] l = listeners.toArray(
                     new RendezvousListener[listeners.size()]);
-            for(int i = 0; i < l.length; i++) {
-                l[i].serviceLost(servicename);
+            for(RendezvousListener listener : l) {
+                listener.serviceLost(servicename);
             }
         }
     };
@@ -174,9 +204,7 @@ public class Rendezvous
     }
 
     public Host getService(int index) {
-        synchronized(this) {
-            return services.values().toArray(new Host[services.size()])[index];
-        }
+        return services.values().toArray(new Host[services.size()])[index];
     }
 
     /**
@@ -185,11 +213,9 @@ public class Rendezvous
      */
     public String getDisplayedName(int index) {
         if(index < this.numberOfServices()) {
-            synchronized(this) {
-                return services.values().toArray(new Host[services.size()])[index].getNickname();
-            }
+            return services.values().toArray(new Host[services.size()])[index].getNickname();
         }
-        return NSBundle.localizedString("Unknown", "");
+        return Locale.localizedString("Unknown");
     }
 
     /**
@@ -199,7 +225,7 @@ public class Rendezvous
     public String getDisplayedName(String identifier) {
         Host host = services.get(identifier);
         if(null == host) {
-            return NSBundle.localizedString("Unknown", "");
+            return Locale.localizedString("Unknown");
         }
         return host.getNickname();
     }
@@ -234,17 +260,19 @@ public class Rendezvous
     public void serviceLost(DNSSDService browser, int flags, int ifIndex, String serviceName,
                             String regType, String domain) {
         log.debug("serviceLost:" + serviceName);
+        final NSAutoreleasePool pool = NSAutoreleasePool.push();
         try {
             String identifier = DNSSD.constructFullName(serviceName, regType, domain);
-            notifier.serviceLost(identifier);
-            synchronized(this) {
-                if(null == this.services.remove(identifier)) {
-                    return;
-                }
+            if(null == this.services.remove(identifier)) {
+                return;
             }
+            notifier.serviceLost(identifier);
         }
         catch(DNSSDException e) {
             log.error(e.getMessage());
+        }
+        finally {
+            pool.drain();
         }
     }
 
@@ -267,20 +295,38 @@ public class Rendezvous
      * @param txtRecord
      */
     public void serviceResolved(DNSSDService resolver, int flags, int ifIndex,
-                                String fullname, String hostname, int port, TXTRecord txtRecord) {
+                                final String fullname, final String hostname, int port, TXTRecord txtRecord) {
         log.debug("serviceResolved:" + hostname);
+        final NSAutoreleasePool pool = NSAutoreleasePool.push();
         try {
-            final Host host = new Host(this.getProtocol(fullname, port), hostname, port);
-            host.getCredentials().setUsername(null);
-            synchronized(this) {
-                this.services.put(fullname, host);
+            final Protocol protocol = this.getProtocol(fullname, port);
+            if(null == protocol) {
+                log.warn("Unknown service type:" + fullname);
+                return;
             }
-            this.notifier.serviceResolved(fullname, hostname);
+            final Host host = new Host(protocol, hostname, port);
+            log.debug("TXT Record:" + txtRecord);
+            if(txtRecord.contains("u")) {
+                host.getCredentials().setUsername(txtRecord.getValueAsString("u"));
+            }
+            else {
+                host.getCredentials().setUsername(null);
+            }
+            if(txtRecord.contains("p")) {
+                host.getCredentials().setPassword(txtRecord.getValueAsString("p"));
+            }
+            if(txtRecord.contains("path")) {
+                host.setDefaultPath(Path.normalize(txtRecord.getValueAsString("path")));
+            }
+            if(null == this.services.put(fullname, host)) {
+                this.notifier.serviceResolved(fullname, hostname);
+            }
         }
         finally {
             // Note: When the desired results have been returned, the client MUST terminate
             // the resolve by calling DNSSDService.stop().
             resolver.stop();
+            pool.drain();
         }
     }
 
@@ -290,18 +336,18 @@ public class Rendezvous
      * @see "http://developer.apple.com/qa/qa2001/qa1312.html"
      */
     public Protocol getProtocol(final String serviceType, final int port) {
-        if(serviceType.contains(SERVICE_TYPE_SFTP) || serviceType.contains(SERVICE_TYPE_SSH)) {
+        if(serviceType.contains(SERVICE_TYPE_SFTP)) {
             return Protocol.SFTP;
         }
         if(serviceType.contains(SERVICE_TYPE_FTP)) {
             return Protocol.FTP;
         }
         if(serviceType.contains(SERVICE_TYPE_WEBDAV)) {
-            if(Protocol.WEBDAV_SSL.getDefaultPort() == port) {
-                return Protocol.WEBDAV_SSL;
-            }
             return Protocol.WEBDAV;
         }
-        return Protocol.getDefaultProtocol(port);
+        if(serviceType.contains(SERVICE_TYPE_WEBDAV_TLS)) {
+            return Protocol.WEBDAV_SSL;
+        }
+        return null;
     }
 }

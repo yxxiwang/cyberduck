@@ -48,6 +48,7 @@ public abstract class HTTPSession extends Session {
             return false;
         }
 
+        @Override
         protected void append(LoggingEvent event) {
             final String m = event.getMessage().toString();
             if(m.startsWith(IN)) {
@@ -63,11 +64,13 @@ public abstract class HTTPSession extends Session {
         super(h);
     }
 
+    @Override
     protected void fireConnectionWillOpenEvent() throws ResolveCanceledException, UnknownHostException {
         Logger.getLogger("httpclient.wire.header").addAppender(appender);
         super.fireConnectionWillOpenEvent();
     }
 
+    @Override
     protected void fireConnectionWillCloseEvent() {
         Logger.getLogger("httpclient.wire.header").removeAppender(appender);
         super.fireConnectionWillCloseEvent();

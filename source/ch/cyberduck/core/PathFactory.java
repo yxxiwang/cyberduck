@@ -18,30 +18,36 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSDictionary;
-
 import java.util.HashMap;
 import java.util.Map;
 
-public abstract class PathFactory {
+public abstract class PathFactory<S extends Session> {
 
+    /**
+     * Registered factories
+     */
     private static Map<Protocol, PathFactory> factories = new HashMap<Protocol, PathFactory>();
 
-    protected abstract Path create(Session session, String path, int type);
+    protected abstract Path create(S session, String path, int type);
 
-    protected abstract Path create(Session session, String parent, String name, int type);
+    protected abstract Path create(S session, String parent, String name, int type);
 
-    protected abstract Path create(Session session, String path, Local file);
+    protected abstract Path create(S session, String path, Local file);
 
-    protected abstract Path create(Session session, NSDictionary dict);
+    protected abstract <T> Path create(S session, T dict);
 
+    /**
+     * Register new factory
+     * @param protocol
+     * @param f
+     */
     public static void addFactory(Protocol protocol, PathFactory f) {
         factories.put(protocol, f);
     }
 
     /**
      * @param parent The parent directory
-     * @param name The pathname relative the the parent directory
+     * @param name   The pathname relative the the parent directory
      */
     public static Path createPath(Session session, String parent, String name, int type) {
         loadClass(session.getHost().getProtocol());
@@ -58,7 +64,7 @@ public abstract class PathFactory {
 
     /**
      * @param parent The parent directory
-     * @param file The local counterpart of this path
+     * @param file   The local counterpart of this path
      */
     public static Path createPath(Session session, String parent, Local file) {
         loadClass(session.getHost().getProtocol());
@@ -67,25 +73,24 @@ public abstract class PathFactory {
 
     /**
      * @param dict Creates a path reading its properties from the dictionary
-     * @see ch.cyberduck.core.Path#getAsDictionary()
      */
-    public static Path createPath(Session session, NSDictionary dict) {
+    public static <T> Path createPath(Session session, T dict) {
         loadClass(session.getHost().getProtocol());
         return (factories.get(session.getHost().getProtocol())).create(session, dict);
     }
 
     private static void loadClass(Protocol protocol) {
-        if (!factories.containsKey(protocol)) {
+        if(!factories.containsKey(protocol)) {
             try {
                 // Load dynamically
-                Class.forName("ch.cyberduck.core." + protocol.getIdentifier() + "." 
+                Class.forName("ch.cyberduck.core." + protocol.getIdentifier() + "."
                         + protocol.getIdentifier().toUpperCase() + "Path");
             }
-            catch (ClassNotFoundException e) {
+            catch(ClassNotFoundException e) {
                 throw new RuntimeException("No class for type: " + protocol);
             }
             // See if it was put in:
-            if (!factories.containsKey(protocol)) {
+            if(!factories.containsKey(protocol)) {
                 throw new RuntimeException("No class for type: " + protocol);
             }
         }

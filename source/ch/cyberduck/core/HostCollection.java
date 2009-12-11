@@ -18,12 +18,10 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.*;
+import ch.cyberduck.core.serializer.HostReaderFactory;
+import ch.cyberduck.core.serializer.HostWriterFactory;
 
 import org.apache.log4j.Logger;
-
-import java.net.URL;
-import java.util.Enumeration;
 
 /**
  * @version $Id$
@@ -35,7 +33,7 @@ public class HostCollection extends BookmarkCollection {
      * Default bookmark file
      */
     private static HostCollection DEFAULT_COLLECTION = new HostCollection(
-            new Local(Preferences.instance().getProperty("application.support.path"), "Favorites.plist")
+            LocalFactory.createLocal(Preferences.instance().getProperty("application.support.path"), "Favorites.plist")
     );
 
     /**
@@ -50,7 +48,6 @@ public class HostCollection extends BookmarkCollection {
      */
     public HostCollection(Local file) {
         this.setFile(file);
-        this.load();
     }
 
     /**
@@ -75,7 +72,8 @@ public class HostCollection extends BookmarkCollection {
         return this.file;
     }
 
-    public synchronized Host get(int row) {
+    @Override
+    public Host get(int row) {
         return super.get(row);
     }
 
@@ -84,7 +82,8 @@ public class HostCollection extends BookmarkCollection {
      * @return
      * @see Host
      */
-    public synchronized boolean add(Host host) {
+    @Override
+    public boolean add(Host host) {
         this.add(this.size(), host);
         return true;
     }
@@ -94,7 +93,8 @@ public class HostCollection extends BookmarkCollection {
      * @param host
      * @see Host
      */
-    public synchronized void add(int row, Host host) {
+    @Override
+    public void add(int row, Host host) {
         super.add(row, this.unique(host));
         this.sort();
         this.save();
@@ -118,10 +118,18 @@ public class HostCollection extends BookmarkCollection {
      * @param row
      * @return the element that was removed from the list.
      */
-    public synchronized Host remove(int row) {
-        Host previous = super.remove(row);
+    @Override
+    public Host remove(int row) {
+        final Host previous = super.remove(row);
         this.save();
         return previous;
+    }
+
+    @Override
+    public boolean remove(Object host) {
+        final boolean found = super.remove(host);
+        this.save();
+        return found;
     }
 
     protected void sort() {
@@ -132,74 +140,23 @@ public class HostCollection extends BookmarkCollection {
      * Saves this collection of bookmarks in to a file to the users's application support directory
      * in a plist xml format
      */
-    protected void save() {
+    @Override
+    public void save() {
         if(Preferences.instance().getBoolean("favorites.save")) {
-            try {
-                NSMutableArray list = new NSMutableArray();
-                for(Host bookmark : this) {
-                    list.addObject(bookmark.getAsDictionary());
-                }
-                NSMutableData collection = new NSMutableData();
-                String[] errorString = new String[]{null};
-                collection.appendData(NSPropertyListSerialization.dataFromPropertyList(list,
-                        NSPropertyListSerialization.PropertyListXMLFormat,
-                        errorString));
-                if(errorString[0] != null) {
-                    log.error("Problem writing bookmark file: " + errorString[0]);
-                }
-                if(collection.writeToURL(new URL(file.toURL()), true)) {
-                    if(log.isInfoEnabled()) {
-                        log.info("Bookmarks sucessfully saved to :" + file.toString());
-                    }
-                }
-                else {
-                    log.error("Error saving Bookmarks to :" + file.toString());
-                }
-            }
-            catch(java.net.MalformedURLException e) {
-                log.error(e.getMessage());
-            }
+            log.info("Saving Bookmarks file: " + file.getAbsolute());
+            HostWriterFactory.instance().write(this, file);
         }
     }
 
     /**
      * Deserialize all the bookmarks saved previously in the users's application support directory
      */
-    protected void load() {
+    @Override
+    public void load() {
         if(file.exists()) {
-            try {
-                log.info("Found Bookmarks file: " + file.toString());
-                NSData plistData = new NSData(new URL(file.toURL()));
-                String[] errorString = new String[]{null};
-                Object propertyListFromXMLData =
-                        NSPropertyListSerialization.propertyListFromData(plistData,
-                                NSPropertyListSerialization.PropertyListImmutable,
-                                new int[]{NSPropertyListSerialization.PropertyListXMLFormat},
-                                errorString);
-                if(errorString[0] != null) {
-                    log.error("Problem reading bookmark file: " + errorString[0]);
-                    return;
-                }
-                if(propertyListFromXMLData instanceof NSArray) {
-                    NSArray entries = (NSArray) propertyListFromXMLData;
-                    Enumeration i = entries.objectEnumerator();
-                    while(i.hasMoreElements()) {
-                        Object element = i.nextElement();
-                        if(element instanceof NSDictionary) {
-                            super.add(new Host((NSDictionary) element));
-                        }
-                    }
-                }
-            }
-            catch(java.net.MalformedURLException e) {
-                log.error(e.getMessage());
-            }
+            log.info("Found Bookmarks file: " + file.getAbsolute());
+            this.addAll(HostReaderFactory.instance().readCollection(file));
             this.sort();
         }
-    }
-
-    public void collectionItemChanged(Host item) {
-        this.save();
-        super.collectionItemChanged(item);
     }
 }

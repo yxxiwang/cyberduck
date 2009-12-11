@@ -18,8 +18,7 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-
+import ch.cyberduck.core.i18n.Locale;
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
 import org.jets3t.service.Constants;
@@ -55,6 +54,7 @@ public abstract class Protocol {
         return new String[]{this.getScheme()};
     }
 
+    @Override
     public boolean equals(Object other) {
         if(other instanceof Protocol) {
             return ((Protocol) other).getIdentifier().equals(this.getIdentifier());
@@ -62,6 +62,7 @@ public abstract class Protocol {
         return false;
     }
 
+    @Override
     public String toString() {
         return this.getIdentifier();
     }
@@ -70,14 +71,14 @@ public abstract class Protocol {
      * @return A mounted disk icon to display
      */
     public String disk() {
-        return this.getIdentifier() + ".icns";
+        return this.getIdentifier();
     }
 
     /**
      * @return A small icon to display
      */
     public String icon() {
-        return this.getIdentifier() + "-icon.png";
+        return this.getIdentifier() + "-icon";
     }
 
     /**
@@ -95,6 +96,22 @@ public abstract class Protocol {
         return true;
     }
 
+    public boolean isEncodingConfigurable() {
+        return false;
+    }
+
+    public boolean isConnectModeConfigurable() {
+        return false;
+    }
+
+    public boolean isUTCTimezone() {
+        return true;
+    }
+
+    public String getUsernamePlaceholder() {
+        return "";
+    }
+
     public String getDefaultHostname() {
         return Preferences.instance().getProperty("connection.hostname.default");
     }
@@ -105,316 +122,435 @@ public abstract class Protocol {
     public abstract int getDefaultPort();
 
     public static final Protocol SFTP = new Protocol() {
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("SFTP (SSH File Transfer Protocol)", "");
+            return Locale.localizedString("SFTP (SSH File Transfer Protocol)");
         }
 
+        @Override
         public int getDefaultPort() {
             return 22;
         }
 
+        @Override
         public String getScheme() {
             return "sftp";
         }
 
+        @Override
         public boolean isSecure() {
+            return true;
+        }
+
+        @Override
+        public boolean isEncodingConfigurable() {
             return true;
         }
     };
 
     public static final Protocol SCP = new Protocol() {
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("SCP (Secure Copy)", "");
+            return Locale.localizedString("SCP (Secure Copy)");
         }
 
+        @Override
         public int getDefaultPort() {
             return 22;
         }
 
+        @Override
         public String getScheme() {
             return "scp";
         }
 
+        @Override
         public boolean isSecure() {
             return true;
         }
     };
 
     public static final Protocol FTP = new Protocol() {
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("FTP (File Transfer Protocol)", "");
+            return Locale.localizedString("FTP (File Transfer Protocol)");
         }
 
+        @Override
         public int getDefaultPort() {
             return 21;
         }
 
+        @Override
         public String getScheme() {
             return "ftp";
+        }
+
+        @Override
+        public boolean isUTCTimezone() {
+            return false;
+        }
+
+        @Override
+        public boolean isEncodingConfigurable() {
+            return true;
+        }
+
+        @Override
+        public boolean isConnectModeConfigurable() {
+            return true;
         }
     };
 
     public static final Protocol FTP_TLS = new Protocol() {
+        @Override
         public String getName() {
             return "FTP-SSL";
         }
 
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("FTPS (FTP/SSL)", "");
+            return Locale.localizedString("FTP-SSL (Explicit AUTH TLS)");
         }
 
+        @Override
         public int getDefaultPort() {
             return 21;
         }
 
+        @Override
         public String getScheme() {
             return "ftps";
         }
 
+        @Override
         public boolean isSecure() {
             return true;
         }
 
+        @Override
         public String disk() {
             return SFTP.disk();
         }
 
+        @Override
         public String icon() {
             return SFTP.icon();
+        }
+
+        @Override
+        public boolean isUTCTimezone() {
+            return false;
+        }
+
+        @Override
+        public boolean isEncodingConfigurable() {
+            return true;
+        }
+
+        @Override
+        public boolean isConnectModeConfigurable() {
+            return true;
         }
     };
 
     public static final Protocol S3 = new Protocol() {
+        @Override
         public String getName() {
             return "S3";
         }
 
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("S3 (Amazon Simple Storage Service)", "S3", "");
+            return Locale.localizedString("S3 (Amazon Simple Storage Service)", "S3");
         }
 
+        @Override
         public String getIdentifier() {
             return "s3";
         }
 
+        @Override
         public int getDefaultPort() {
             return 443;
         }
 
+        @Override
         public String getScheme() {
             return "https";
         }
 
+        @Override
         public String[] getSchemes() {
             return new String[]{this.getScheme(), "s3"};
         }
 
+        @Override
         public boolean isSecure() {
             return true;
         }
 
+        @Override
         public String getDefaultHostname() {
             return Constants.S3_HOSTNAME;
         }
 
+        @Override
         public boolean isWebUrlConfigurable() {
             return false;
+        }
+
+        @Override
+        public String getUsernamePlaceholder() {
+            return Locale.localizedString("Access Key ID", "S3");
         }
     };
 
     public static final Protocol EUCALYPTUS = new Protocol() {
+        @Override
         public String getName() {
             return "Walrus";
         }
 
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("Eucalyptus Walrus (Elastic Utility Computing Architecture for Linking Your Programs To Useful Systems)", "S3", "");
+            return Locale.localizedString("Eucalyptus Walrus", "S3");
         }
 
+        @Override
         public String getIdentifier() {
             return "ec";
         }
 
+        @Override
         public int getDefaultPort() {
             return 8773;
         }
 
+        @Override
         public String getScheme() {
             return "http";
         }
 
+        @Override
         public String[] getSchemes() {
             return new String[]{this.getScheme(), "walrus"};
         }
 
+        @Override
         public boolean isSecure() {
             return false;
         }
 
+        @Override
         public boolean isHostnameConfigurable() {
             return true;
         }
 
+        @Override
         public String getDefaultHostname() {
             return "mayhem9.cs.ucsb.edu";
         }
 
+        @Override
         public boolean isWebUrlConfigurable() {
             return false;
         }
 
+        @Override
         public String disk() {
             return S3.disk();
         }
 
+        @Override
         public String icon() {
-            return S3.icon();
+            return "eucalyptus-icon";
         }
     };
 
     public static final Protocol WEBDAV = new Protocol() {
+        @Override
         public String getName() {
             return "WebDAV (HTTP)";
         }
 
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("WebDAV (Web-based Distributed Authoring and Versioning)", "");
+            return Locale.localizedString("WebDAV (Web-based Distributed Authoring and Versioning)");
         }
 
+        @Override
         public String getIdentifier() {
             return "dav";
         }
 
+        @Override
         public int getDefaultPort() {
             return 80;
         }
 
+        @Override
         public String getScheme() {
             return "http";
         }
 
+        @Override
         public String[] getSchemes() {
             return new String[]{this.getScheme(), "dav"};
         }
     };
 
     public static final Protocol WEBDAV_SSL = new Protocol() {
+        @Override
         public String getName() {
             return "WebDAV (HTTPS)";
         }
 
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("WebDAV (HTTP/SSL)", "");
+            return Locale.localizedString("WebDAV (HTTP/SSL)");
         }
 
+        @Override
         public String getIdentifier() {
             return "davs";
         }
 
+        @Override
         public int getDefaultPort() {
             return 443;
         }
 
+        @Override
         public String getScheme() {
             return "https";
         }
 
+        @Override
         public boolean isSecure() {
             return true;
         }
 
+        @Override
         public String[] getSchemes() {
             return new String[]{this.getScheme(), "davs"};
         }
 
+        @Override
         public String disk() {
             return WEBDAV.disk();
         }
 
+        @Override
         public String icon() {
             return WEBDAV.icon();
         }
     };
 
     public static final Protocol IDISK = new Protocol() {
+        @Override
         public String getName() {
             return "MobileMe";
         }
 
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("MobileMe iDisk (WebDAV)", "");
+            return Locale.localizedString("MobileMe iDisk (WebDAV)");
         }
 
+        @Override
         public String getIdentifier() {
             return "me";
         }
 
+        @Override
         public int getDefaultPort() {
             return 443;
         }
 
+        @Override
         public String getScheme() {
             return "https";
         }
 
+        @Override
         public boolean isSecure() {
             return true;
         }
 
+        @Override
         public String[] getSchemes() {
             return new String[]{this.getScheme(), "idisk"};
         }
 
+        @Override
         public boolean isHostnameConfigurable() {
             return false;
         }
 
+        @Override
         public String getDefaultHostname() {
             return "idisk.me.com";
         }
 
+        @Override
         public boolean isWebUrlConfigurable() {
             return false;
+        }
+
+        @Override
+        public String icon() {
+            return "NSDotMac";
         }
     };
 
     public static final Protocol MOSSO = new Protocol() {
+        @Override
         public String getName() {
             return "Cloud Files";
         }
 
+        @Override
         public String getDescription() {
-            return "Mosso Cloud Files";
+            return "Rackspace Cloud Files";
         }
 
+        @Override
         public String getIdentifier() {
             return "cf";
         }
 
+        @Override
         public int getDefaultPort() {
             return 443;
         }
 
+        @Override
         public String getScheme() {
             return "https";
         }
 
+        @Override
         public String[] getSchemes() {
             return new String[]{this.getScheme(), "mosso", "cloudfiles", "cf"};
         }
 
+        @Override
         public boolean isSecure() {
             return true;
         }
 
+        @Override
         public boolean isHostnameConfigurable() {
             return false;
         }
 
+        @Override
         public String getDefaultHostname() {
             return "storage.clouddrive.com";
         }
 
+        @Override
         public boolean isWebUrlConfigurable() {
             return false;
         }
@@ -426,9 +562,9 @@ public abstract class Protocol {
      */
     public static Protocol getDefaultProtocol(int port) {
         final Protocol[] protocols = getKnownProtocols();
-        for(int i = 0; i < protocols.length; i++) {
-            if(protocols[i].getDefaultPort() == port) {
-                return protocols[i];
+        for(Protocol protocol : protocols) {
+            if(protocol.getDefaultPort() == port) {
+                return protocol;
             }
         }
         log.warn("Cannot find default protocol for port:" + port);
@@ -446,18 +582,18 @@ public abstract class Protocol {
     }
 
     /**
-     * @param protocol
+     * @param identifier
      * @return
      */
-    public static Protocol forName(final String protocol) {
+    public static Protocol forName(final String identifier) {
         final Protocol[] protocols = getKnownProtocols();
-        for(int i = 0; i < protocols.length; i++) {
-            if(protocols[i].getIdentifier().equals(protocol)) {
-                return protocols[i];
+        for(Protocol protocol : protocols) {
+            if(protocol.getIdentifier().equals(identifier)) {
+                return protocol;
             }
         }
-        log.fatal("Unknown protocol:" + protocol);
-        return Protocol.forScheme(protocol);
+        log.fatal("Unknown protocol:" + identifier);
+        return Protocol.forScheme(identifier);
     }
 
     /**
@@ -466,10 +602,10 @@ public abstract class Protocol {
      */
     public static Protocol forScheme(final String scheme) {
         final Protocol[] protocols = getKnownProtocols();
-        for(int i = 0; i < protocols.length; i++) {
-            for(int k = 0; k < protocols[i].getSchemes().length; k++) {
-                if(protocols[i].getSchemes()[k].equals(scheme)) {
-                    return protocols[i];
+        for(Protocol protocol : protocols) {
+            for(int k = 0; k < protocol.getSchemes().length; k++) {
+                if(protocol.getSchemes()[k].equals(scheme)) {
+                    return protocol;
                 }
             }
         }
@@ -490,10 +626,10 @@ public abstract class Protocol {
     public static boolean isURL(String str) {
         if(StringUtils.isNotBlank(str)) {
             Protocol[] protocols = getKnownProtocols();
-            for(int i = 0; i < protocols.length; i++) {
-                String[] schemes = protocols[i].getSchemes();
-                for(int k = 0; k < schemes.length; k++) {
-                    if(str.startsWith(schemes[k] + "://")) {
+            for(Protocol protocol : protocols) {
+                String[] schemes = protocol.getSchemes();
+                for(String scheme : schemes) {
+                    if(str.startsWith(scheme + "://")) {
                         return true;
                     }
                 }

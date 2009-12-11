@@ -18,14 +18,15 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.*;
-
 import ch.cyberduck.core.ftp.FTPSession;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.core.io.BandwidthThrottle;
+import ch.cyberduck.core.serializer.Deserializer;
+import ch.cyberduck.core.serializer.DeserializerFactory;
+import ch.cyberduck.core.serializer.Serializer;
+import ch.cyberduck.core.serializer.SerializerFactory;
 import ch.cyberduck.core.sftp.SFTPSession;
-import ch.cyberduck.ui.cocoa.CDMainApplication;
-import ch.cyberduck.ui.cocoa.growl.Growl;
-import ch.cyberduck.ui.cocoa.threading.DefaultMainAction;
+import ch.cyberduck.ui.growl.Growl;
 
 import org.apache.log4j.Logger;
 
@@ -60,6 +61,11 @@ public abstract class Transfer implements Serializable {
      * not continue any forther processing
      */
     private boolean canceled;
+
+    // Backward compatibilty for serializaton
+    public static final int KIND_DOWNLOAD = 0;
+    public static final int KIND_UPLOAD = 1;
+    public static final int KIND_SYNC = 2;
 
     protected Transfer() {
         ;
@@ -102,6 +108,9 @@ public abstract class Transfer implements Serializable {
      */
     private Date timestamp;
 
+    /**
+     * @return
+     */
     public boolean isResumable() {
         if(!this.isComplete()) {
             if(this.getSession() instanceof SFTPSession) {
@@ -140,69 +149,52 @@ public abstract class Transfer implements Serializable {
      */
     protected abstract void init();
 
-    public Transfer(NSDictionary dict, Session s) {
+    public <T> Transfer(T dict, Session s) {
         this.session = s;
         this.init(dict);
     }
 
-    public void init(NSDictionary dict) {
-        Object rootsObj = dict.objectForKey("Roots");
+    public <T> void init(T serialized) {
+        final Deserializer dict = DeserializerFactory.createDeserializer(serialized);
+        final List rootsObj = dict.listForKey("Roots");
         if(rootsObj != null) {
-            NSArray r = (NSArray) rootsObj;
             roots = new Collection<Path>();
-            for(int i = 0; i < r.count(); i++) {
-                final NSDictionary rootDict = (NSDictionary) r.objectAtIndex(i);
-                final Path root = PathFactory.createPath(this.session, rootDict);
-                if(rootDict.objectForKey("Complete") != null) {
-                    root.getStatus().setComplete(true);
-                }
-                if(rootDict.objectForKey("Skipped") != null) {
-                    root.getStatus().setSkipped(true);
-                }
-                roots.add(root);
+            for(Object rootDict : rootsObj) {
+                roots.add(PathFactory.createPath(this.session, rootDict));
             }
         }
-        Object sizeObj = dict.objectForKey("Size");
+        Object sizeObj = dict.stringForKey("Size");
         if(sizeObj != null) {
             this.size = Double.parseDouble(sizeObj.toString());
         }
-        Object timestampObj = dict.objectForKey("Timestamp");
+        Object timestampObj = dict.stringForKey("Timestamp");
         if(timestampObj != null) {
             this.timestamp = new Date(Long.parseLong(timestampObj.toString()));
         }
-        Object currentObj = dict.objectForKey("Current");
+        Object currentObj = dict.stringForKey("Current");
         if(currentObj != null) {
             this.transferred = Double.parseDouble(currentObj.toString());
         }
         this.init();
-        Object bandwidthObj = dict.objectForKey("Bandwidth");
+        Object bandwidthObj = dict.stringForKey("Bandwidth");
         if(bandwidthObj != null) {
             this.bandwidth.setRate(Float.parseFloat(bandwidthObj.toString()));
         }
     }
 
-    public NSMutableDictionary getAsDictionary() {
-        NSMutableDictionary dict = new NSMutableDictionary();
-        dict.setObjectForKey(this.getSession().getHost().getAsDictionary(), "Host");
-        NSMutableArray r = new NSMutableArray();
-        for(Path root : this.roots) {
-            final NSMutableDictionary rootDict = (NSMutableDictionary)root.getAsDictionary();
-            if(root.getStatus().isComplete()) {
-                rootDict.setObjectForKey(String.valueOf(true), "Complete");
-            }
-            if(root.getStatus().isSkipped()) {
-                rootDict.setObjectForKey(String.valueOf(true), "Skipped");
-            }
-            r.addObject(rootDict);
-        }
-        dict.setObjectForKey(r, "Roots");
-        dict.setObjectForKey(String.valueOf(this.getSize()), "Size");
-        dict.setObjectForKey(String.valueOf(this.getTransferred()), "Current");
+    public abstract <T> T getAsDictionary();
+
+    public Serializer getSerializer() {
+        final Serializer dict = SerializerFactory.createSerializer();
+        dict.setObjectForKey(this.getSession().getHost(), "Host");
+        dict.setListForKey(this.roots, "Roots");
+        dict.setStringForKey(String.valueOf(this.getSize()), "Size");
+        dict.setStringForKey(String.valueOf(this.getTransferred()), "Current");
         if(timestamp != null) {
-            dict.setObjectForKey(String.valueOf(timestamp.getTime()), "Timestamp");
+            dict.setStringForKey(String.valueOf(timestamp.getTime()), "Timestamp");
         }
         if(bandwidth != null) {
-            dict.setObjectForKey(String.valueOf(bandwidth.getRate()), "Bandwidth");
+            dict.setStringForKey(String.valueOf(bandwidth.getRate()), "Bandwidth");
         }
         return dict;
     }
@@ -228,28 +220,24 @@ public abstract class Transfer implements Serializable {
         canceled = false;
         running = true;
         queued = false;
-        for(TransferListener listener : listeners) {
+        for(TransferListener listener : listeners.toArray(new TransferListener[listeners.size()])) {
             listener.transferWillStart();
         }
     }
 
     public void fireTransferQueued() {
         final Session session = this.getSession();
-        CDMainApplication.invoke(new DefaultMainAction() {
-            public void run() {
-                Growl.instance().notify("Transfer queued", session.getHost().getHostname());
-            }
-        });
-        session.message(NSBundle.localizedString("Maximum allowed connections exceeded. Waiting", "Status", ""));
+        Growl.instance().notify("Transfer queued", session.getHost().getHostname());
+        session.message(Locale.localizedString("Maximum allowed connections exceeded. Waiting", "Status"));
         queued = true;
-        for(TransferListener listener: listeners) {
+        for(TransferListener listener : listeners.toArray(new TransferListener[listeners.size()])) {
             listener.transferQueued();
         }
     }
 
     public void fireTransferResumed() {
         queued = false;
-        for(TransferListener listener: listeners) {
+        for(TransferListener listener : listeners.toArray(new TransferListener[listeners.size()])) {
             listener.transferResumed();
         }
     }
@@ -257,7 +245,7 @@ public abstract class Transfer implements Serializable {
     protected void fireTransferDidEnd() {
         running = false;
         queued = false;
-        for(TransferListener listener : listeners) {
+        for(TransferListener listener : listeners.toArray(new TransferListener[listeners.size()])) {
             listener.transferDidEnd();
         }
         synchronized(Queue.instance()) {
@@ -267,13 +255,13 @@ public abstract class Transfer implements Serializable {
     }
 
     protected void fireWillTransferPath(Path path) {
-        for(TransferListener listener : listeners) {
+        for(TransferListener listener : listeners.toArray(new TransferListener[listeners.size()])) {
             listener.willTransferPath(path);
         }
     }
 
     protected void fireDidTransferPath(Path path) {
-        for(TransferListener listener : listeners) {
+        for(TransferListener listener : listeners.toArray(new TransferListener[listeners.size()])) {
             listener.didTransferPath(path);
         }
     }
@@ -289,13 +277,12 @@ public abstract class Transfer implements Serializable {
     public void setBandwidth(float bytesPerSecond) {
         log.debug("setBandwidth:" + bytesPerSecond);
         bandwidth.setRate(bytesPerSecond);
-        for(TransferListener listener : listeners) {
+        for(TransferListener listener : listeners.toArray(new TransferListener[listeners.size()])) {
             listener.bandwidthChanged(bandwidth);
         }
     }
 
     /**
-     * 
      * @return
      */
     public Date getTimestamp() {
@@ -343,7 +330,7 @@ public abstract class Transfer implements Serializable {
         return name;
     }
 
-    protected abstract class TransferFilter implements PathFilter<Path> {
+    protected abstract static class TransferFilter implements PathFilter<Path> {
         /**
          * Called before the file will actually get transferred. Should prepare for the transfer
          * such as calculating its size.
@@ -354,48 +341,6 @@ public abstract class Transfer implements Serializable {
          * @see PathFilter#accept(AbstractPath)
          */
         public abstract void prepare(Path p);
-    }
-
-    /**
-     *
-     */
-    private Map<AbstractPath, Boolean> _existing = new HashMap<AbstractPath, Boolean>();
-
-    /**
-     * Looks for the file in the parent directory listing. Returns cached version if possible for better performance
-     *
-     * @param file
-     * @return True if the file exists
-     * @see ch.cyberduck.core.AbstractPath#exists()
-     */
-    public boolean exists(Path file) {
-        if(!_existing.containsKey(file)) {
-            log.debug("exists:" + file);
-            final AbstractPath parent = file.getParent();
-            if(_existing.containsKey(parent) && !_existing.get(parent)) {
-                // Shortcut if parent file does not exist
-                _existing.put(file, false);
-            }
-            else {
-                _existing.put(file, file.exists());
-            }
-        }
-        return _existing.get(file);
-    }
-
-    /**
-     * Looks for the file in the parent directory listing. Returns cached version if possible for better performance
-     *
-     * @param file
-     * @return True if the file exists
-     * @see ch.cyberduck.core.AbstractPath#exists()
-     */
-    public boolean exists(Local file) {
-        if(!_existing.containsKey(file)) {
-            log.debug("exists:" + file);
-            _existing.put(file, file.exists());
-        }
-        return _existing.get(file);
     }
 
     /**
@@ -425,17 +370,11 @@ public abstract class Transfer implements Serializable {
     public abstract AttributedList<Path> childs(final Path parent);
 
     /**
-     * @param file
-     * @return True if its child items are cached
-     */
-    public abstract boolean isCached(Path file);
-
-    /**
      * @param item
      * @return True if the path is not skipped when transferring
      */
     public boolean isIncluded(Path item) {
-        return !item.getStatus().isSkipped() && this.isSelectable(item);
+        return item.getStatus().isSelected() && !item.getStatus().isSkipped();
     }
 
     /**
@@ -445,21 +384,15 @@ public abstract class Transfer implements Serializable {
      * @return True if selectable
      */
     public boolean isSelectable(Path item) {
-        return true;
+        return !item.getStatus().isSkipped();
     }
 
-    /**
-     * Recursively update the status of all cached child items
-     *
-     * @param item
-     * @param skipped True if skipped
-     */
-    public void setSkipped(Path item, final boolean skipped) {
-        item.getStatus().setSkipped(skipped);
+    public void setSelected(Path item, final boolean selected) {
+        item.getStatus().setSelected(selected);
         if(item.attributes.isDirectory()) {
-            if(this.isCached(item)) {
+            if(item.isCached()) {
                 for(Path child : this.childs(item)) {
-                    this.setSkipped(child, skipped);
+                    this.setSelected(child, selected);
                 }
             }
         }
@@ -476,6 +409,7 @@ public abstract class Transfer implements Serializable {
      */
     private void transfer(final Path p, final TransferFilter filter) {
         if(!this.isIncluded(p)) {
+            p.getStatus().setComplete(true);
             return;
         }
 
@@ -486,9 +420,9 @@ public abstract class Transfer implements Serializable {
         if(filter.accept(p)) {
             this.fireWillTransferPath(p);
             _current = p;
-            _current.getStatus().reset();
-            _transferImpl(_current);
-            this.fireDidTransferPath(_current);
+            p.getStatus().reset();
+            _transferImpl(p);
+            this.fireDidTransferPath(p);
         }
 
         if(!this.check()) {
@@ -496,6 +430,7 @@ public abstract class Transfer implements Serializable {
         }
 
         if(p.attributes.isDirectory()) {
+            p.getStatus().reset();
             boolean failure = false;
             final AttributedList<Path> childs = this.childs(p);
             if(!childs.attributes().isReadable()) {
@@ -503,21 +438,15 @@ public abstract class Transfer implements Serializable {
             }
             for(Path child : childs) {
                 this.transfer(child, filter);
-                if(!child.getStatus().isComplete()) {
+                if(child.attributes.isFile() && !child.getStatus().isComplete()) {
                     failure = true;
                 }
             }
             if(!failure) {
                 p.getStatus().setComplete(true);
             }
+            session.cache().remove(p);
         }
-
-        this.cleanup(p);
-    }
-
-    private void cleanup(final Path p) {
-        // Remove from the _existing hashmap
-        _existing.remove(p);
     }
 
     /**
@@ -568,7 +497,7 @@ public abstract class Transfer implements Serializable {
             // Reset the cached size of the transfer and progress value
             this.reset();
 
-            // Calculate some information about the files in advance to give some progress information
+            // Calculate some information about the root files in advance to give some progress information
             for(Path next : roots) {
                 this.prepare(next, filter);
             }
@@ -637,7 +566,6 @@ public abstract class Transfer implements Serializable {
         if(options.closeSession) {
             session.cache().clear();
         }
-        _existing.clear();
     }
 
     /**
@@ -671,6 +599,7 @@ public abstract class Transfer implements Serializable {
             this.transfer(options);
         }
         finally {
+            this.prompt = null;
             this.fireTransferDidEnd();
         }
     }
@@ -679,8 +608,7 @@ public abstract class Transfer implements Serializable {
         final TransferCollection q = TransferCollection.instance();
         // This transfer should respect the settings for maximum number of transfers
         if(q.numberOfRunningTransfers() - q.numberOfQueuedTransfers() - 1
-                >= (int) Preferences.instance().getDouble("queue.maxtransfers"))
-        {
+                >= (int) Preferences.instance().getDouble("queue.maxtransfers")) {
             this.fireTransferQueued();
             log.info("Queuing " + this.toString());
             // The maximum number of transfers is already reached
@@ -739,7 +667,6 @@ public abstract class Transfer implements Serializable {
     }
 
     /**
-     *
      * @return
      */
     public boolean isReset() {
@@ -777,6 +704,10 @@ public abstract class Transfer implements Serializable {
         return size;
     }
 
+    public void setSize(double size) {
+        this.size = size;
+    }
+
     /**
      * Should not be called too frequently as it iterates over all items
      *
@@ -786,12 +717,12 @@ public abstract class Transfer implements Serializable {
         return transferred;
     }
 
-    public String toString() {
-        return this.getName();
+    public void setTransferred(double transferred) {
+        this.transferred = transferred;
     }
 
-    protected void finalize() throws java.lang.Throwable {
-        log.debug("finalize:" + super.toString());
-        super.finalize();
+    @Override
+    public String toString() {
+        return this.getName();
     }
 }

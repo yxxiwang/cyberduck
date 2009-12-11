@@ -18,24 +18,30 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSCell;
-import com.apple.cocoa.application.NSImage;
-import com.apple.cocoa.application.NSOutlineView;
-import com.apple.cocoa.application.NSTableColumn;
-import com.apple.cocoa.foundation.NSAttributedString;
-
 import ch.cyberduck.core.*;
-import ch.cyberduck.ui.cocoa.threading.AbstractBackgroundAction;
+import ch.cyberduck.core.i18n.Locale;
+import ch.cyberduck.core.threading.AbstractBackgroundAction;
+import ch.cyberduck.ui.cocoa.application.NSCell;
+import ch.cyberduck.ui.cocoa.application.NSImage;
+import ch.cyberduck.ui.cocoa.application.NSOutlineView;
+import ch.cyberduck.ui.cocoa.application.NSTableColumn;
+import ch.cyberduck.ui.cocoa.foundation.NSAttributedString;
+import ch.cyberduck.ui.cocoa.foundation.NSNumber;
+import ch.cyberduck.ui.cocoa.foundation.NSObject;
+import ch.cyberduck.ui.cocoa.foundation.NSString;
+import ch.cyberduck.ui.cocoa.model.OutlinePathReference;
 
 import org.apache.log4j.Logger;
+import org.rococoa.Rococoa;
+import org.rococoa.cocoa.foundation.NSInteger;
 
-import java.util.Collections;
+import java.text.MessageFormat;
 import java.util.List;
 
 /**
  * @version $Id$
  */
-public abstract class CDTransferPromptModel extends CDController {
+public abstract class CDTransferPromptModel extends CDOutlineDataSource {
     protected static Logger log = Logger.getLogger(CDTransferPromptModel.class);
 
     /**
@@ -46,29 +52,36 @@ public abstract class CDTransferPromptModel extends CDController {
     /**
      * The root nodes to be included in the prompt dialog
      */
-    protected final List<Path> _roots = new Collection<Path>();
+    protected final List<Path> roots = new Collection<Path>();
 
     /**
      *
      */
-    private CDWindowController controller;
+    private CDTransferPrompt controller;
 
     /**
      * @param c        The parent window to attach the prompt
      * @param transfer
      */
-    public CDTransferPromptModel(CDWindowController c, final Transfer transfer) {
+    public CDTransferPromptModel(CDTransferPrompt c, final Transfer transfer) {
         this.controller = c;
         this.transfer = transfer;
     }
 
-    public void add(Path p) {
-        _roots.add(p);
+    @Override
+    protected void invalidate() {
+        tableViewCache.clear();
+        cache.clear();
+        super.invalidate();
     }
 
-    protected abstract class PromptFilter implements PathFilter<Path> {
+    public void add(Path p) {
+        roots.add(p);
+    }
+
+    protected abstract static class PromptFilter implements PathFilter<Path> {
         public boolean accept(Path file) {
-            if(transfer.exists(file)) {
+            if(file.exists()) {
                 if(file.attributes.getSize() == -1) {
                     file.readSize();
                 }
@@ -80,6 +93,17 @@ public abstract class CDTransferPromptModel extends CDController {
         }
     }
 
+    /**
+     * @param reference
+     * @return
+     */
+    protected Path lookup(NSObject reference) {
+        if(roots.contains(reference)) {
+            return roots.get(roots.indexOf(reference));
+        }
+        return cache.lookup(new OutlinePathReference(reference));
+    }
+
     protected static final String INCLUDE_COLUMN = "INCLUDE";
     protected static final String WARNING_COLUMN = "WARNING";
     protected static final String FILENAME_COLUMN = "FILENAME";
@@ -87,15 +111,15 @@ public abstract class CDTransferPromptModel extends CDController {
     // virtual column to implement keyboard selection
     protected static final String TYPEAHEAD_COLUMN = "TYPEAHEAD";
 
-    /**
-     * @see com.apple.cocoa.application.NSTableView.DataSource
-     */
-    public void outlineViewSetObjectValueForItem(final NSOutlineView outlineView, Number value,
-                                                 final NSTableColumn tableColumn, Path item) {
-        String identifier = (String)tableColumn.identifier();
+    @Override
+    public void outlineView_setObjectValue_forTableColumn_byItem(final NSOutlineView outlineView, NSObject value,
+                                                                 final NSTableColumn tableColumn, NSObject item) {
+        String identifier = tableColumn.identifier();
         if(identifier.equals(INCLUDE_COLUMN)) {
-            transfer.setSkipped(item, (value).intValue() == NSCell.OffState);
-            if(item.attributes.isDirectory()) {
+            final Path path = this.lookup(item);
+            final int state = Rococoa.cast(value, NSNumber.class).intValue();
+            transfer.setSelected(path, state == NSCell.NSOnState);
+            if(path.attributes.isDirectory()) {
                 outlineView.setNeedsDisplay(true);
             }
         }
@@ -107,6 +131,10 @@ public abstract class CDTransferPromptModel extends CDController {
      * @return
      */
     protected abstract PathFilter<Path> filter();
+
+    public void clearCache() {
+        tableViewCache.clear();
+    }
 
     /**
      * File listing cache for children of the root paths
@@ -127,14 +155,11 @@ public abstract class CDTransferPromptModel extends CDController {
      *         using the standard regex exclusion and the additional passed filter
      */
     protected AttributedList<Path> childs(final Path path) {
-        if(log.isDebugEnabled()) {
-            log.debug("childs:" + path);
-        }
         synchronized(isLoadingListingInBackground) {
             // Check first if it hasn't been already requested so we don't spawn
             // a multitude of unecessary threads
             if(!isLoadingListingInBackground.contains(path)) {
-                if(transfer.isCached(path)) {
+                if(cache.containsKey(path)) {
                     return cache.get(path, new NullComparator<Path>(), filter());
                 }
                 isLoadingListingInBackground.add(path);
@@ -143,91 +168,96 @@ public abstract class CDTransferPromptModel extends CDController {
                 controller.background(new AbstractBackgroundAction() {
                     public void run() {
                         cache.put(path, transfer.childs(path));
-                        //Hack to filter the list first in the background thread
-                        cache.get(path, new NullComparator<Path>(), CDTransferPromptModel.this.filter());
                     }
 
+                    @Override
+                    public String getActivity() {
+                        return MessageFormat.format(Locale.localizedString("Listing directory {0}", "Status"),
+                                path.getName());
+                    }
+
+                    @Override
                     public void cleanup() {
-                        log.debug("childs#cleanup");
                         synchronized(isLoadingListingInBackground) {
                             isLoadingListingInBackground.remove(path);
-                            if(transfer.isCached(path) && isLoadingListingInBackground.isEmpty()) {
-                                ((CDTransferPrompt)controller).reloadData();
+                            if(isLoadingListingInBackground.isEmpty()) {
+                                controller.reloadData();
                             }
                         }
                     }
+
+                    @Override
+                    public Object lock() {
+                        return transfer.getSession();
+                    }
                 });
             }
-            log.warn("No cached listing for " + path.getName());
-            return new AttributedList<Path>(Collections.<Path>emptyList());
+            return cache.get(path, new NullComparator<Path>(), filter());
         }
     }
 
-    protected static final NSImage ALERT_ICON = NSImage.imageNamed("alert.tiff");
+    protected final NSImage ALERT_ICON = CDIconCache.iconNamed("alert.tiff");
 
-    protected Object objectValueForItem(final Path item, final String identifier) {
-        if(null != item) {
+    /**
+     * Second cache because it is expensive to create proxy instances
+     */
+    protected AttributeCache<Path> tableViewCache = new AttributeCache<Path>(
+            Preferences.instance().getInteger("browser.model.cache.size")
+    );
+
+    /**
+     * @param item
+     * @param identifier
+     * @return
+     */
+    protected NSObject objectValueForItem(final Path item, final String identifier) {
+        final NSObject cached = tableViewCache.get(item, identifier);
+        if(null == cached) {
             if(identifier.equals(INCLUDE_COLUMN)) {
                 // Not included if the particular path should be skipped or skip
                 // existing is selected as the default transfer action for duplicate
                 // files
-                final boolean skipped = !transfer.isIncluded(item)
-                        || ((CDTransferPrompt)controller).getAction().equals(TransferAction.ACTION_SKIP);
-                return skipped ? NSCell.OffState : NSCell.OnState;
+                final boolean included = transfer.isIncluded(item) && !controller.getAction().equals(TransferAction.ACTION_SKIP);
+                return NSNumber.numberWithInt(included ? NSCell.NSOnState : NSCell.NSOffState);
             }
             if(identifier.equals(FILENAME_COLUMN)) {
-                return new NSAttributedString(item.getName(),
-                        CDTableCellAttributes.browserFontLeftAlignment());
+                return tableViewCache.put(item, identifier, NSAttributedString.attributedStringWithAttributes(item.getName(),
+                        CDTableCellAttributes.browserFontLeftAlignment()));
             }
             if(identifier.equals(TYPEAHEAD_COLUMN)) {
-                return item.getName();
+                return tableViewCache.put(item, identifier, NSString.stringWithString(item.getName()));
             }
+            throw new IllegalArgumentException("Unknown identifier: " + identifier);
         }
-        log.warn("objectValueForItem:" + item + "," + identifier);
-        return null;
+        return cached;
     }
 
-    /**
-     * @see NSOutlineView.DataSource
-     */
-    public boolean outlineViewIsItemExpandable(final NSOutlineView view, final Path item) {
+    public boolean outlineView_isItemExpandable(final NSOutlineView view, final NSObject item) {
         if(null == item) {
             return false;
         }
-        return item.attributes.isDirectory();
+        return this.lookup(item).attributes.isDirectory();
     }
 
-    /**
-     * @see NSOutlineView.DataSource
-     */
-    public int outlineViewNumberOfChildrenOfItem(final NSOutlineView view, Path item) {
+    public NSInteger outlineView_numberOfChildrenOfItem(final NSOutlineView view, NSObject item) {
         if(null == item) {
-            return _roots.size();
+            return new NSInteger(roots.size());
         }
-        return this.childs(item).size();
+        return new NSInteger(this.childs(this.lookup(item)).size());
     }
 
-    /**
-     * @see NSOutlineView.DataSource
-     *      Invoked by outlineView, and returns the child item at the specified index. Children
-     *      of a given parent item are accessed sequentially. If item is null, this method should
-     *      return the appropriate child item of the root object
-     */
-    public Path outlineViewChildOfItem(final NSOutlineView view, int index, Path item) {
+    public NSObject outlineView_child_ofItem(final NSOutlineView view, NSInteger index, NSObject item) {
         if(null == item) {
-            return _roots.get(index);
+            return roots.get(index.intValue()).<NSObject>getReference().unique();
         }
-        List childs = this.childs(item);
+        final AttributedList<Path> childs = this.childs(this.lookup(item));
         if(childs.isEmpty()) {
             return null;
         }
-        return (Path)childs.get(index);
+        return childs.get(index.intValue()).<NSObject>getReference().unique();
     }
 
-    /**
-     * @see NSOutlineView.DataSource
-     */
-    public Object outlineViewObjectValueForItem(final NSOutlineView view, final NSTableColumn tableColumn, Path item) {
-        return this.objectValueForItem(item, (String)tableColumn.identifier());
+    public NSObject outlineView_objectValueForTableColumn_byItem(final NSOutlineView outlineView, final NSTableColumn tableColumn, NSObject item) {
+        return this.objectValueForItem(this.lookup(item), tableColumn.identifier());
     }
 }

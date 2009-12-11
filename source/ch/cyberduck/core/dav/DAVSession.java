@@ -18,11 +18,10 @@ package ch.cyberduck.core.dav;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-
 import ch.cyberduck.core.*;
 import ch.cyberduck.core.Credentials;
 import ch.cyberduck.core.http.HTTPSession;
+import ch.cyberduck.core.i18n.Locale;
 
 import org.apache.commons.httpclient.*;
 import org.apache.commons.httpclient.auth.*;
@@ -47,6 +46,7 @@ public class DAVSession extends HTTPSession {
     }
 
     private static class Factory extends SessionFactory {
+        @Override
         protected Session create(Host h) {
             return new DAVSession(h);
         }
@@ -58,6 +58,7 @@ public class DAVSession extends HTTPSession {
         super(h);
     }
 
+    @Override
     public void check() throws IOException {
         super.check();
         if(this.isConnected()) {
@@ -70,19 +71,26 @@ public class DAVSession extends HTTPSession {
         client.getHostConfiguration().getParams().setParameter(
                 "http.useragent", this.getUserAgent()
         );
-        if(Proxy.isHTTPProxyEnabled()) {
-            this.DAV.setProxy(Proxy.getHTTPProxyHost(), Proxy.getHTTPProxyPort());
+        final Proxy proxy = ProxyFactory.instance();
+        if(proxy.isHTTPProxyEnabled()) {
+            this.DAV.setProxy(proxy.getHTTPProxyHost(), proxy.getHTTPProxyPort());
+            //this.DAV.setProxyCredentials(new UsernamePasswordCredentials(null, null));
+        }
+        else {
+            this.DAV.setProxy(null, -1);
+            this.DAV.setProxyCredentials(null);
         }
         this.DAV.setFollowRedirects(Preferences.instance().getBoolean("webdav.followRedirects"));
     }
 
+    @Override
     protected void connect() throws IOException, LoginCanceledException {
         if(this.isConnected()) {
             return;
         }
         this.fireConnectionWillOpenEvent();
 
-        this.message(MessageFormat.format(NSBundle.localizedString("Opening {0} connection to {1}", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("Opening {0} connection to {1}", "Status"),
                 host.getProtocol().getName(), host.getHostname()));
 
         WebdavResource.setDefaultAction(WebdavResource.NOACTION);
@@ -98,7 +106,7 @@ public class DAVSession extends HTTPSession {
 
         WebdavResource.setDefaultAction(WebdavResource.BASIC);
 
-        this.message(MessageFormat.format(NSBundle.localizedString("{0} connection opened", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("{0} connection opened", "Status"),
                 host.getProtocol().getName()));
 
         if(null == this.DAV.getResourceType() || !this.DAV.getResourceType().isCollection()) {
@@ -108,6 +116,7 @@ public class DAVSession extends HTTPSession {
         this.fireConnectionDidOpenEvent();
     }
 
+    @Override
     public void setLoginController(final LoginController c) {
         this.login = new LoginController() {
 
@@ -115,7 +124,7 @@ public class DAVSession extends HTTPSession {
                 final Credentials credentials = host.getCredentials();
                 if(!credentials.isValid()) {
                     if(Preferences.instance().getBoolean("connection.login.useKeychain")) {
-                        credentials.setPassword(((AbstractLoginController)c).find(host));
+                        credentials.setPassword(((AbstractLoginController) c).find(host));
                     }
                 }
                 // Do not prompt for credentials yet but in the credentials provider
@@ -140,6 +149,7 @@ public class DAVSession extends HTTPSession {
         };
     }
 
+    @Override
     protected void login(final Credentials credentials) throws IOException, LoginCanceledException {
         try {
             final HttpClient client = this.DAV.getSessionInstance(this.DAV.getHttpURL(), false);
@@ -174,7 +184,7 @@ public class DAVSession extends HTTPSession {
                             login.fail(DAVSession.this.getHost(), realm.toString());
                         }
 
-                        message(MessageFormat.format(NSBundle.localizedString("Authenticating as {0}", "Status", ""),
+                        message(MessageFormat.format(Locale.localizedString("Authenticating as {0}", "Status"),
                                 credentials.getUsername()));
 
                         retry++;
@@ -201,7 +211,7 @@ public class DAVSession extends HTTPSession {
             // Try to get basic properties fo this resource using these credentials
             this.DAV.setProperties(WebdavResource.BASIC, DepthSupport.DEPTH_0);
 
-            this.message(NSBundle.localizedString("Login successful", "Credentials", ""));
+            this.message(Locale.localizedString("Login successful", "Credentials"));
         }
         catch(HttpException e) {
             if(e.getReasonCode() == HttpStatus.SC_UNAUTHORIZED) {
@@ -211,6 +221,7 @@ public class DAVSession extends HTTPSession {
         }
     }
 
+    @Override
     public void close() {
         try {
             if(this.isConnected()) {
@@ -227,6 +238,7 @@ public class DAVSession extends HTTPSession {
         }
     }
 
+    @Override
     public void interrupt() {
         try {
             super.interrupt();
@@ -244,36 +256,31 @@ public class DAVSession extends HTTPSession {
         }
     }
 
-    public Path workdir() throws ConnectionCanceledException {
-        if(!this.isConnected()) {
-            throw new ConnectionCanceledException();
-        }
-        if(null == workdir) {
-            workdir = PathFactory.createPath(this, Path.DELIMITER, Path.VOLUME_TYPE | Path.DIRECTORY_TYPE);
-        }
-        return workdir;
-    }
-
-    protected void setWorkdir(Path workdir) throws IOException {
+    @Override
+    public void setWorkdir(Path workdir) throws IOException {
         if(!this.isConnected()) {
             throw new ConnectionCanceledException();
         }
         DAV.setPath(workdir.isRoot() ? Path.DELIMITER : workdir.getAbsolute() + Path.DELIMITER);
-        this.workdir = workdir;
+        super.setWorkdir(workdir);
     }
 
+    @Override
     protected void noop() throws IOException {
         ;
     }
 
+    @Override
     public void sendCommand(String command) {
         throw new UnsupportedOperationException();
     }
 
+    @Override
     public boolean isConnected() {
         return DAV != null;
     }
 
+    @Override
     public void error(Path path, String message, Throwable e) {
         if(e instanceof HttpException) {
             super.error(path, message, new HttpException(

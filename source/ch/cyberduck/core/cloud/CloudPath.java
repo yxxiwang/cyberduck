@@ -18,9 +18,6 @@ package ch.cyberduck.core.cloud;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSDictionary;
-
-import ch.cyberduck.core.AbstractPath;
 import ch.cyberduck.core.Local;
 import ch.cyberduck.core.Path;
 
@@ -32,7 +29,7 @@ import org.apache.log4j.Logger;
 public abstract class CloudPath extends Path {
     private static Logger log = Logger.getLogger(CloudPath.class);
 
-    public CloudPath(NSDictionary dict) {
+    public <T> CloudPath(T dict) {
         super(dict);
     }
 
@@ -48,8 +45,9 @@ public abstract class CloudPath extends Path {
         super(parent, local);
     }
 
-    public AbstractPath getParent() {
-        final CloudPath parent = (CloudPath)super.getParent();
+    @Override
+    public Path getParent() {
+        final Path parent = super.getParent();
         if(parent.isRoot()) {
             parent.attributes.setType(Path.VOLUME_TYPE | Path.DIRECTORY_TYPE);
         }
@@ -57,7 +55,6 @@ public abstract class CloudPath extends Path {
     }
 
     /**
-     *
      * @return
      */
     public boolean isContainer() {
@@ -90,16 +87,4 @@ public abstract class CloudPath extends Path {
         }
         return null;
     }
-
-    /**
-     * @param enabled
-     * @param cnames
-     * @param logging
-     */
-    public abstract void writeDistribution(final boolean enabled, final String[] cnames, boolean logging);
-
-    /**
-     * @return
-     */
-    public abstract Distribution readDistribution();
 }

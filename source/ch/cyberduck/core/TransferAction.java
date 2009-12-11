@@ -18,7 +18,7 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
+import ch.cyberduck.core.i18n.Locale;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -36,6 +36,7 @@ public abstract class TransferAction {
 
     public abstract String toString();
 
+    @Override
     public boolean equals(Object other) {
         if(null == other) {
             return false;
@@ -53,12 +54,14 @@ public abstract class TransferAction {
      * Overwrite any prior existing file
      */
     public static final TransferAction ACTION_OVERWRITE = new TransferAction() {
+        @Override
         public String toString() {
             return "overwrite";
         }
 
+        @Override
         public String getLocalizableString() {
-            return NSBundle.localizedString("Overwrite", "");
+            return Locale.localizedString("Overwrite");
         }
     };
 
@@ -66,12 +69,14 @@ public abstract class TransferAction {
      * Append to any exsisting file when writing
      */
     public static final TransferAction ACTION_RESUME = new TransferAction() {
+        @Override
         public String toString() {
             return "resume";
         }
 
+        @Override
         public String getLocalizableString() {
-            return NSBundle.localizedString("Resume", "");
+            return Locale.localizedString("Resume");
         }
     };
 
@@ -79,12 +84,14 @@ public abstract class TransferAction {
      * Create a new file with a similar name
      */
     public static final TransferAction ACTION_RENAME = new TransferAction() {
+        @Override
         public String toString() {
             return "similar";
         }
 
+        @Override
         public String getLocalizableString() {
-            return NSBundle.localizedString("Rename", "");
+            return Locale.localizedString("Rename");
         }
     };
 
@@ -92,12 +99,14 @@ public abstract class TransferAction {
      * Do not transfer file
      */
     public static final TransferAction ACTION_SKIP = new TransferAction() {
+        @Override
         public String toString() {
             return "skip";
         }
 
+        @Override
         public String getLocalizableString() {
-            return NSBundle.localizedString("Skip", "");
+            return Locale.localizedString("Skip");
         }
     };
 
@@ -105,22 +114,26 @@ public abstract class TransferAction {
      * Prompt the user about existing files
      */
     public static final TransferAction ACTION_CALLBACK = new TransferAction() {
+        @Override
         public String toString() {
             return "ask";
         }
 
+        @Override
         public String getLocalizableString() {
-            return NSBundle.localizedString("Prompt", "");
+            return Locale.localizedString("Prompt");
         }
     };
 
     public static final TransferAction ACTION_CANCEL = new TransferAction() {
+        @Override
         public String toString() {
             return "cancel";
         }
 
+        @Override
         public String getLocalizableString() {
-            return NSBundle.localizedString("Cancel", "");
+            return Locale.localizedString("Cancel");
         }
     };
 }

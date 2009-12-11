@@ -1,7 +1,7 @@
 package ch.cyberduck.ui.cocoa;
 
 /*
- *  Copyright (c) 2005 Whitney Young. All rights reserved.
+ *  Copyright (c) 2005 David Kocher. All rights reserved.
  *  http://cyberduck.ch/
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -18,57 +18,28 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSImage;
-import com.apple.cocoa.application.NSTextFieldCell;
-import com.apple.cocoa.application.NSView;
-import com.apple.cocoa.foundation.NSCoder;
-import com.apple.cocoa.foundation.NSPoint;
-import com.apple.cocoa.foundation.NSRect;
+import ch.cyberduck.ui.cocoa.application.NSImage;
+import ch.cyberduck.ui.cocoa.application.NSTextFieldCell;
 
-public class CDOutlineCell extends NSTextFieldCell {
+import org.rococoa.ObjCClass;
 
-    public CDOutlineCell() {
-        super();
+/**
+ * @version $Id$
+ */
+public abstract class CDOutlineCell extends NSTextFieldCell {
+    private static final _Class CLASS = org.rococoa.Rococoa.createClass("CDOutlineCell", _Class.class);
+
+    public static CDOutlineCell outlineCell() {
+        return CLASS.alloc().init();
     }
 
-    protected CDOutlineCell(NSCoder decoder, long token) {
-        super(decoder, token);
+    public interface _Class extends ObjCClass {
+        CDOutlineCell alloc();
     }
 
-    protected void encodeWithCoder(NSCoder encoder) {
-        super.encodeWithCoder(encoder);
-    }
+    @Override
+    public abstract CDOutlineCell init();
 
-    private NSImage icon;
+    public abstract void setIcon(NSImage aImage);
 
-    public void setIcon(NSImage icon) {
-        this.icon = icon;
-    }
-
-    public NSImage icon() {
-        return this.icon;
-    }
-
-    public void drawInteriorWithFrameInView(NSRect cellFrame, NSView controlView) {
-        if (this.icon() != null) {
-            if (controlView.isFlipped()) {
-                this.icon().compositeToPoint(new NSPoint(cellFrame.origin().x() + 3,
-                        cellFrame.origin().y() + (cellFrame.size().height() + this.icon().size().height()) / 2),
-                        NSImage.CompositeSourceOver);
-            }
-            else {
-                this.icon().compositeToPoint(new NSPoint(cellFrame.origin().x() + 3,
-                        cellFrame.origin().y() + (cellFrame.size().height() - this.icon().size().height()) / 2),
-                        NSImage.CompositeSourceOver);
-            }
-            super.drawInteriorWithFrameInView(new NSRect(cellFrame.origin().x() + 6 + this.icon().size().width(),
-                    cellFrame.origin().y(),
-                    cellFrame.width() - 6 - this.icon().size().width(),
-                    cellFrame.height()),
-                    controlView);
-        }
-        else {
-            super.drawInteriorWithFrameInView(cellFrame, controlView);
-        }
-    }
 }

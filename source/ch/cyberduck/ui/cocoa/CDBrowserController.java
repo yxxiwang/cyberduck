@@ -18,527 +18,96 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.*;
-import com.apple.cocoa.foundation.*;
-
 import ch.cyberduck.core.*;
 import ch.cyberduck.core.Collection;
-import ch.cyberduck.core.ftp.FTPSession;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.core.io.BandwidthThrottle;
 import ch.cyberduck.core.sftp.SFTPSession;
 import ch.cyberduck.core.ssl.SSLSession;
-import ch.cyberduck.core.util.URLSchemeHandlerConfiguration;
+import ch.cyberduck.core.threading.AbstractBackgroundAction;
+import ch.cyberduck.core.threading.BackgroundAction;
+import ch.cyberduck.core.threading.BackgroundActionRegistry;
+import ch.cyberduck.ui.cocoa.application.*;
 import ch.cyberduck.ui.cocoa.delegate.ArchiveMenuDelegate;
 import ch.cyberduck.ui.cocoa.delegate.EditMenuDelegate;
-import ch.cyberduck.ui.cocoa.growl.Growl;
+import ch.cyberduck.ui.cocoa.foundation.*;
+import ch.cyberduck.ui.cocoa.model.OutlinePathReference;
 import ch.cyberduck.ui.cocoa.odb.Editor;
 import ch.cyberduck.ui.cocoa.odb.EditorFactory;
-import ch.cyberduck.ui.cocoa.quicklook.QuickLook;
-import ch.cyberduck.ui.cocoa.threading.BackgroundAction;
-import ch.cyberduck.ui.cocoa.threading.BackgroundActionRegistry;
+import ch.cyberduck.ui.cocoa.quicklook.QLPreviewPanel;
+import ch.cyberduck.ui.cocoa.quicklook.QLPreviewPanelController;
+import ch.cyberduck.ui.cocoa.quicklook.QuickLookFactory;
+import ch.cyberduck.ui.cocoa.threading.BrowserBackgroundAction;
 import ch.cyberduck.ui.cocoa.threading.WindowMainAction;
+import ch.cyberduck.ui.cocoa.urlhandler.URLSchemeHandlerConfiguration;
+import ch.cyberduck.ui.growl.Growl;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
+import org.rococoa.Foundation;
+import org.rococoa.ID;
+import org.rococoa.Rococoa;
+import org.rococoa.Selector;
+import org.rococoa.cocoa.CGFloat;
+import org.rococoa.cocoa.foundation.NSInteger;
+import org.rococoa.cocoa.foundation.NSRect;
+import org.rococoa.cocoa.foundation.NSSize;
+import org.rococoa.cocoa.foundation.NSUInteger;
+
+import com.sun.jna.ptr.PointerByReference;
 
 import java.io.File;
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.security.cert.X509Certificate;
 import java.text.MessageFormat;
 import java.util.*;
-
-import com.enterprisedt.net.ftp.FTPConnectMode;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @version $Id$
  */
-public class CDBrowserController extends CDWindowController
-        implements NSToolbarItem.ItemValidation {
+public class CDBrowserController extends CDWindowController implements NSToolbar.Delegate, QLPreviewPanelController {
     private static Logger log = Logger.getLogger(CDBrowserController.class);
-
-    /**
-     * Applescriptability
-     *
-     * @return The NSIndexSpecifier for all browsers or null if there is none
-     */
-    public NSScriptObjectSpecifier objectSpecifier() {
-        log.debug("objectSpecifier");
-        NSArray orderedDocs = (NSArray) NSKeyValue.valueForKey(NSApplication.sharedApplication(), "orderedBrowsers");
-        int index = orderedDocs.indexOfObject(this);
-        if(index >= 0 && index < orderedDocs.count()) {
-            NSScriptClassDescription desc
-                    = (NSScriptClassDescription) NSScriptClassDescription.classDescriptionForClass(NSApplication.class);
-            return new NSIndexSpecifier(desc, null, "orderedBrowsers", index);
-        }
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @return
-     */
-    public String getWorkingDirectory() {
-        if(this.isMounted()) {
-            return this.workdir().getAbsolute();
-        }
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public Object handleMountScriptCommand(NSScriptCommand command) {
-        log.debug("handleMountScriptCommand:" + command);
-        NSDictionary args = command.evaluatedArguments();
-        Object portObj = args.objectForKey("Port");
-        Host host;
-        Object bookmarkObj = args.objectForKey("Bookmark");
-        if(bookmarkObj != null) {
-            int index = HostCollection.defaultCollection().indexOf(bookmarkObj);
-            if(index < 0) {
-                return null;
-            }
-            host = (Host) HostCollection.defaultCollection().get(index);
-        }
-        else {
-            if(portObj != null) {
-                Object protocolObj = args.objectForKey("Protocol");
-                if(protocolObj != null) {
-                    host = new Host(
-                            Protocol.forScheme((String) args.objectForKey("Protocol")),
-                            (String) args.objectForKey("Host"),
-                            Integer.parseInt((String) args.objectForKey("Port")));
-                }
-                else {
-                    host = new Host((String) args.objectForKey("Host"),
-                            Integer.parseInt((String) args.objectForKey("Port")));
-                }
-            }
-            else {
-                Object protocolObj = args.objectForKey("Protocol");
-                if(protocolObj != null) {
-                    host = new Host(
-                            Protocol.forName((String) args.objectForKey("Protocol")),
-                            (String) args.objectForKey("Host"));
-                }
-                else {
-                    host = new Host((String) args.objectForKey("Host"));
-                }
-            }
-            Object pathObj = args.objectForKey("InitialPath");
-            if(pathObj != null) {
-                host.setDefaultPath((String) args.objectForKey("InitialPath"));
-            }
-            Object userObj = args.objectForKey("Username");
-            if(userObj != null) {
-                host.setCredentials(
-                        (String) args.objectForKey("Username"), (String) args.objectForKey("Password"));
-            }
-            Object modeObj = args.objectForKey("Mode");
-            if(modeObj != null) {
-                if(modeObj.equals(FTPConnectMode.ACTIVE.toString())) {
-                    host.setFTPConnectMode(FTPConnectMode.ACTIVE);
-                }
-                if(modeObj.equals(FTPConnectMode.PASV.toString())) {
-                    host.setFTPConnectMode(FTPConnectMode.PASV);
-                }
-            }
-        }
-        final Session session = this.init(host);
-        final Path workdir = session.mount();
-        if(session instanceof FTPSession) {
-            ((FTPSession) session).setStatListSupportedEnabled(false);
-        }
-        this.setWorkdir(workdir);
-        BackgroundActionRegistry.instance().block();
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public Object handleCloseScriptCommand(NSScriptCommand command) {
-        log.debug("handleCloseScriptCommand:" + command);
-        this.unmountImpl();
-        BackgroundActionRegistry.instance().block();
-        this.window().close();
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public Object handleDisconnectScriptCommand(NSScriptCommand command) {
-        log.debug("handleDisconnectScriptCommand:" + command);
-        this.unmount();
-        BackgroundActionRegistry.instance().block();
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public NSArray handleListScriptCommand(NSScriptCommand command) {
-        log.debug("handleListScriptCommand:" + command);
-        NSMutableArray result = new NSMutableArray();
-        if(this.isMounted()) {
-            NSDictionary args = command.evaluatedArguments();
-            Object pathObj = args.objectForKey("Path");
-            Path path = this.workdir();
-            if(pathObj != null) {
-                String folder = (String) args.objectForKey("Path");
-                if(folder.charAt(0) == '/') {
-                    path = PathFactory.createPath(this.session,
-                            folder, Path.DIRECTORY_TYPE);
-                }
-                else {
-                    path = PathFactory.createPath(this.session,
-                            this.workdir().getAbsolute(),
-                            folder, Path.DIRECTORY_TYPE);
-                }
-            }
-            for(AbstractPath i : path.childs()) {
-                result.addObject(i.getName());
-            }
-        }
-        return result;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public Object handleGotoScriptCommand(NSScriptCommand command) {
-        log.debug("handleGotoScriptCommand:" + command);
-        if(this.isMounted()) {
-            NSDictionary args = command.evaluatedArguments();
-            CDGotoController c = new CDGotoController(this);
-            c.gotoFolder(this.workdir(), (String) args.objectForKey("Path"));
-        }
-        BackgroundActionRegistry.instance().block();
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public Object handleRenameScriptCommand(NSScriptCommand command) {
-        log.debug("handleRenameScriptCommand:" + command);
-        if(this.isMounted()) {
-            NSDictionary args = command.evaluatedArguments();
-            String from = (String) args.objectForKey("Path");
-            if(!from.startsWith(Path.DELIMITER)) {
-                from = this.workdir().getAbsolute() + Path.DELIMITER + from;
-            }
-            String to = (String) args.objectForKey("Name");
-            if(!to.startsWith(Path.DELIMITER)) {
-                to = this.workdir().getAbsolute() + Path.DELIMITER + to;
-            }
-            this.renamePath(PathFactory.createPath(session, from, Path.FILE_TYPE),
-                    PathFactory.createPath(session, to, Path.FILE_TYPE));
-        }
-        BackgroundActionRegistry.instance().block();
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public Object handleCreateFolderScriptCommand(NSScriptCommand command) {
-        log.debug("handleCreateFolderScriptCommand:" + command);
-        if(this.isMounted()) {
-            NSDictionary args = command.evaluatedArguments();
-            CDFolderController c = new CDFolderController(this);
-            c.createFolder(this.workdir(), (String) args.objectForKey("Path"));
-        }
-        BackgroundActionRegistry.instance().block();
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public Integer handleExistsScriptCommand(NSScriptCommand command) {
-        log.debug("handleExistsScriptCommand:" + command);
-        if(this.isMounted()) {
-            NSDictionary args = command.evaluatedArguments();
-            Path path = PathFactory.createPath(this.session,
-                    this.workdir().getAbsolute(),
-                    (String) args.objectForKey("Path"), Path.FILE_TYPE);
-            return new Integer(path.exists() ? 1 : 0);
-        }
-        return new Integer(0);
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public Object handleCreateFileScriptCommand(NSScriptCommand command) {
-        log.debug("handleCreateFileScriptCommand:" + command);
-        if(this.isMounted()) {
-            NSDictionary args = command.evaluatedArguments();
-            CDCreateFileController c = new CDCreateFileController(this);
-            c.createFile(this.workdir(), (String) args.objectForKey("Path"), false);
-        }
-        BackgroundActionRegistry.instance().block();
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public Object handleEditScriptCommand(NSScriptCommand command) {
-        log.debug("handleEditScriptCommand:" + command);
-        if(this.isMounted()) {
-            NSDictionary args = command.evaluatedArguments();
-            Path path = PathFactory.createPath(this.session,
-                    this.workdir().getAbsolute(),
-                    (String) args.objectForKey("Path"), Path.FILE_TYPE);
-            Editor editor = EditorFactory.createEditor(this, path.getLocal(), path);
-            editor.open();
-        }
-        BackgroundActionRegistry.instance().block();
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public Object handleDeleteScriptCommand(NSScriptCommand command) {
-        log.debug("handleDeleteScriptCommand:" + command);
-        if(this.isMounted()) {
-            NSDictionary args = command.evaluatedArguments();
-            Path path = PathFactory.createPath(this.session,
-                    this.workdir().getAbsolute(),
-                    (String) args.objectForKey("Path"), Path.FILE_TYPE);
-            if(path.list().attributes().isReadable()) {
-                path.attributes.setType(Path.DIRECTORY_TYPE);
-            }
-            path.delete();
-        }
-        BackgroundActionRegistry.instance().block();
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public Object handleRefreshScriptCommand(NSScriptCommand command) {
-        log.debug("handleRefreshScriptCommand:" + command);
-        if(this.isMounted()) {
-            this.reloadButtonClicked(null);
-        }
-        BackgroundActionRegistry.instance().block();
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public TransferAction handleSyncScriptCommand(NSScriptCommand command) {
-        log.debug("handleSyncScriptCommand:" + command);
-        if(this.isMounted()) {
-            NSDictionary args = command.evaluatedArguments();
-            final Path path = PathFactory.createPath(this.session,
-                    (String) args.objectForKey("Path"), Path.DIRECTORY_TYPE);
-            Object localObj = args.objectForKey("Local");
-            if(localObj != null) {
-                path.setLocal(new Local((String) localObj));
-            }
-            final Transfer q = new SyncTransfer(path);
-            this.transfer(q, true, new TransferPrompt() {
-                public TransferAction prompt() {
-                    return TransferAction.ACTION_OVERWRITE;
-                }
-            });
-        }
-        BackgroundActionRegistry.instance().block();
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public TransferAction handleDownloadScriptCommand(NSScriptCommand command) {
-        log.debug("handleDownloadScriptCommand:" + command);
-        if(this.isMounted()) {
-            NSDictionary args = command.evaluatedArguments();
-            final Path path = PathFactory.createPath(this.session,
-                    this.workdir().getAbsolute(),
-                    (String) args.objectForKey("Path"), Path.FILE_TYPE);
-            if(path.list().attributes().isReadable()) {
-                path.attributes.setType(Path.DIRECTORY_TYPE);
-            }
-            Object localObj = args.objectForKey("Local");
-            if(localObj != null) {
-                path.setLocal(new Local((String) localObj, path.getName()));
-            }
-            Object nameObj = args.objectForKey("Name");
-            if(nameObj != null) {
-                path.setLocal(new Local(path.getLocal().getParent().getAbsolute(), (String) nameObj));
-            }
-            final Transfer q = new DownloadTransfer(path);
-            this.transfer(q, true, new TransferPrompt() {
-                public TransferAction prompt() {
-                    return TransferAction.ACTION_OVERWRITE;
-                }
-            });
-        }
-        BackgroundActionRegistry.instance().block();
-        return null;
-    }
-
-    /**
-     * Applescriptability
-     *
-     * @param command
-     * @return
-     */
-    public TransferAction handleUploadScriptCommand(NSScriptCommand command) {
-        log.debug("handleUploadScriptCommand:" + command);
-        if(this.isMounted()) {
-            NSDictionary args = command.evaluatedArguments();
-            final Path path = PathFactory.createPath(this.session,
-                    this.workdir().getAbsolute(),
-                    new Local((String) args.objectForKey("Path")));
-            Object remoteObj = args.objectForKey("Remote");
-            if(remoteObj != null) {
-                path.setPath((String) remoteObj, path.getName());
-            }
-            Object nameObj = args.objectForKey("Name");
-            if(nameObj != null) {
-                path.setPath(this.workdir().getAbsolute(), (String) nameObj);
-            }
-            final Transfer q = new UploadTransfer(path);
-            this.transfer(q, true, new TransferPrompt() {
-                public TransferAction prompt() {
-                    return TransferAction.ACTION_OVERWRITE;
-                }
-            });
-        }
-        BackgroundActionRegistry.instance().block();
-        return null;
-    }
-
-    // ----------------------------------------------------------
-    // Constructor
-    // ----------------------------------------------------------
 
     public CDBrowserController() {
         this.loadBundle();
     }
 
+    @Override
     protected String getBundleName() {
         return "Browser";
     }
 
-    public static CDBrowserController controllerForWindow(NSWindow window) {
-        if(window.isVisible()) {
-            Object delegate = window.delegate();
-            if(delegate != null && delegate instanceof CDBrowserController) {
-                return (CDBrowserController) delegate;
-            }
-        }
-        return null;
-    }
-
     public static void validateToolbarItems() {
-        NSArray windows = NSApplication.sharedApplication().windows();
-        int count = windows.count();
-        while(0 != count--) {
-            NSWindow window = (NSWindow) windows.objectAtIndex(count);
-            CDBrowserController controller = CDBrowserController.controllerForWindow(window);
-            if(null != controller) {
-                window.toolbar().validateVisibleItems();
-            }
+        for(CDBrowserController controller : CDMainController.getBrowsers()) {
+            controller.window().toolbar().validateVisibleItems();
         }
     }
 
     public static void updateBookmarkTableRowHeight() {
-        NSArray windows = NSApplication.sharedApplication().windows();
-        int count = windows.count();
-        while(0 != count--) {
-            NSWindow window = (NSWindow) windows.objectAtIndex(count);
-            CDBrowserController controller = CDBrowserController.controllerForWindow(window);
-            if(null != controller) {
-                controller._updateBookmarkCell();
-            }
+        for(CDBrowserController controller : CDMainController.getBrowsers()) {
+            controller._updateBookmarkCell();
         }
     }
 
     public static void updateBrowserTableAttributes() {
-        NSArray windows = NSApplication.sharedApplication().windows();
-        int count = windows.count();
-        while(0 != count--) {
-            NSWindow window = (NSWindow) windows.objectAtIndex(count);
-            CDBrowserController controller = CDBrowserController.controllerForWindow(window);
-            if(null != controller) {
-                controller._updateBrowserAttributes(controller.browserListView);
-                controller._updateBrowserAttributes(controller.browserOutlineView);
-            }
+        for(CDBrowserController controller : CDMainController.getBrowsers()) {
+            controller._updateBrowserAttributes(controller.browserListView);
+            controller._updateBrowserAttributes(controller.browserOutlineView);
         }
     }
 
     public static void updateBrowserTableColumns() {
-        NSArray windows = NSApplication.sharedApplication().windows();
-        int count = windows.count();
-        while(0 != count--) {
-            NSWindow window = (NSWindow) windows.objectAtIndex(count);
-            CDBrowserController controller = CDBrowserController.controllerForWindow(window);
-            if(null != controller) {
-                controller._updateBrowserColumns(controller.browserListView);
-                controller._updateBrowserColumns(controller.browserOutlineView);
-            }
+        for(CDBrowserController controller : CDMainController.getBrowsers()) {
+            controller._updateBrowserColumns(controller.browserListView);
+            controller._updateBrowserColumns(controller.browserOutlineView);
         }
     }
 
     private NSToolbar toolbar;
 
+    @Override
     public void awakeFromNib() {
-        log.debug("awakeFromNib");
         this._updateBrowserColumns(this.browserListView);
         this._updateBrowserColumns(this.browserOutlineView);
 
@@ -546,8 +115,8 @@ public class CDBrowserController extends CDWindowController
             this.logDrawer.open();
         }
         // Configure Toolbar
-        this.toolbar = new NSToolbar("Cyberduck Toolbar");
-        this.toolbar.setDelegate(this);
+        this.toolbar = NSToolbar.toolbarWithIdentifier("Cyberduck Toolbar");
+        this.toolbar.setDelegate((this.id()));
         this.toolbar.setAllowsUserCustomization(true);
         this.toolbar.setAutosavesConfiguration(true);
         this.window().setToolbar(toolbar);
@@ -561,10 +130,12 @@ public class CDBrowserController extends CDWindowController
         }
 
         this.validateNavigationButtons();
+
+        super.awakeFromNib();
     }
 
     protected Comparator<Path> getComparator() {
-        return ((CDAbstractPathTableDelegate) this.getSelectedBrowserView().delegate()).getSortingComparator();
+        return this.getSelectedBrowserDelegate().getSortingComparator();
     }
 
     /**
@@ -643,11 +214,11 @@ public class CDBrowserController extends CDWindowController
             if(this.isMounted()) {
                 int row = this.bookmarkModel.getSource().indexOf(this.getSession().getHost());
                 if(row != -1) {
-                    this.bookmarkTable.selectRow(row, false);
-                    this.bookmarkTable.scrollRowToVisible(row);
+                    this.bookmarkTable.selectRowIndexes(NSIndexSet.indexSetWithIndex(new NSInteger(row)), false);
+                    this.bookmarkTable.scrollRowToVisible(new NSInteger(row));
                 }
             }
-            this.updateStatusLabel(this.bookmarkTable.numberOfRows() + " " + NSBundle.localizedString("Bookmarks", ""));
+            this.updateStatusLabel(this.bookmarkTable.numberOfRows() + " " + Locale.localizedString("Bookmarks"));
             this.window().makeFirstResponder(bookmarkTable);
         }
         else {
@@ -657,7 +228,7 @@ public class CDBrowserController extends CDWindowController
             else {
                 this.window().makeFirstResponder(this.quickConnectPopup);
             }
-            this.updateStatusLabel(null);
+            this.updateStatusLabel();
         }
     }
 
@@ -679,17 +250,16 @@ public class CDBrowserController extends CDWindowController
      * Make the broser reload its content. Will make use of the cache.
      *
      * @param selected The items to be selected
-     * @see #setSelectedPaths(java.util.Collection)
+     * @see #setSelectedPaths(java.util.List)
      */
     protected void reloadData(final List<Path> selected) {
         log.debug("reloadData");
-        this.deselectAll();
         // Tell the browser view to reload the data. This will request all paths from the browser model
         // which will refetch paths from the server marked as invalid.
         final NSTableView browser = this.getSelectedBrowserView();
         browser.reloadData();
         this.setSelectedPaths(selected);
-        this.updateStatusLabel(null);
+        this.updateStatusLabel();
     }
 
     /**
@@ -710,9 +280,13 @@ public class CDBrowserController extends CDWindowController
      */
     private void selectRow(int row, boolean expand) {
         log.debug("selectRow:" + row);
+        if(-1 == row) {
+            return;
+        }
         final NSTableView browser = this.getSelectedBrowserView();
-        browser.selectRow(row, expand);
-        browser.scrollRowToVisible(row);
+        final NSInteger index = new NSInteger(row);
+        browser.selectRowIndexes(NSIndexSet.indexSetWithIndex(index), expand);
+        browser.scrollRowToVisible(index);
     }
 
     /**
@@ -731,25 +305,18 @@ public class CDBrowserController extends CDWindowController
         log.debug("setSelectedPaths");
         this.deselectAll();
         if(!selected.isEmpty()) {
-            switch(this.browserSwitchView.selectedSegment()) {
+            switch(browserSwitchView.selectedSegment()) {
                 case SWITCH_LIST_VIEW: {
                     //selection handling
-                    for(Iterator<Path> iter = selected.iterator(); iter.hasNext();) {
-                        this.selectRow(iter.next(), true);
+                    for(Path path : selected) {
+                        this.selectRow(path, true);
                     }
                     break;
                 }
                 case SWITCH_OUTLINE_VIEW: {
-                    for(int i = 0; i < this.browserOutlineView.numberOfRows(); i++) {
-                        final Object o = this.browserOutlineView.itemAtRow(i);
-                        if(null == o) {
-                            continue;
-                        }
-                        if(o instanceof Path) {
-                            if(selected.contains(o)) {
-                                this.selectRow((Path) o, true);
-                            }
-                        }
+                    for(Path path : selected) {
+                        final int row = browserOutlineView.rowForItem(path.<NSObject>getReference().unique()).intValue();
+                        this.selectRow(row, true);
                     }
                     break;
                 }
@@ -775,8 +342,8 @@ public class CDBrowserController extends CDWindowController
         Collection<Path> selectedFiles = new Collection<Path>();
         if(this.isMounted()) {
             NSIndexSet iterator = this.getSelectedBrowserView().selectedRowIndexes();
-            for(int index = iterator.firstIndex(); index != NSIndexSet.NotFound; index = iterator.indexGreaterThanIndex(index)) {
-                Path selected = this.pathAtRow(index);
+            for(NSUInteger index = iterator.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = iterator.indexGreaterThanIndex(index)) {
+                Path selected = this.pathAtRow(index.intValue());
                 if(null == selected) {
                     break;
                 }
@@ -787,90 +354,90 @@ public class CDBrowserController extends CDWindowController
     }
 
     protected int getSelectionCount() {
-        return this.getSelectedBrowserView().numberOfSelectedRows();
+        return this.getSelectedBrowserView().numberOfSelectedRows().intValue();
     }
 
     private void deselectAll() {
         log.debug("deselectAll");
-        this.getSelectedBrowserView().deselectAll(null);
+        final NSTableView browser = this.getSelectedBrowserView();
+        if(null == browser) {
+            return;
+        }
+        browser.deselectAll(null);
     }
 
     private Path pathAtRow(int row) {
-        Path item = null;
         switch(this.browserSwitchView.selectedSegment()) {
             case SWITCH_LIST_VIEW: {
                 final AttributedList<Path> childs = this.browserListModel.childs(this.workdir());
                 if(row < childs.size()) {
-                    item = childs.get(row);
+                    return childs.get(row);
                 }
                 break;
             }
             case SWITCH_OUTLINE_VIEW: {
-                if(row < this.browserOutlineView.numberOfRows()) {
-                    item = (Path) this.browserOutlineView.itemAtRow(row);
+                if(row < this.browserOutlineView.numberOfRows().intValue()) {
+                    return this.lookup(new OutlinePathReference(this.browserOutlineView.itemAtRow(new NSInteger(row))));
                 }
                 break;
             }
         }
-        return item;
+        log.warn("No item at row:" + row);
+        return null;
     }
 
-    // ----------------------------------------------------------
-    // Outlets
-    // ----------------------------------------------------------
-
+    @Override
     public void setWindow(NSWindow window) {
-        window.setDelegate(this);
-        window.setTitle((String) NSBundle.mainBundle().infoDictionary().objectForKey("CFBundleName"));
-        window.setMiniwindowImage(NSImage.imageNamed("cyberduck-document.icns"));
+        window.setTitle(NSBundle.mainBundle().infoDictionary().objectForKey("CFBundleName").toString());
+        window.setMiniwindowImage(CDIconCache.iconNamed("cyberduck-document.icns"));
         window.setMovableByWindowBackground(true);
+        window.setDelegate(this.id());
         super.setWindow(window);
     }
 
     private CDTranscriptController transcript;
 
+    @Outlet
     private NSDrawer logDrawer;
 
-    private NSDrawer.Notifications logDrawerNotifications = new NSDrawer.Notifications() {
-        public void drawerWillOpen(NSNotification notification) {
-            logDrawer.setContentSize(new NSSize(
-                    logDrawer.contentSize().width(),
-                    Preferences.instance().getFloat("browser.logDrawer.size.height")
-            ));
-        }
+    public void drawerWillOpen(NSNotification notification) {
+        logDrawer.setContentSize(new NSSize(
+                logDrawer.contentSize().width.doubleValue(),
+                Preferences.instance().getDouble("browser.logDrawer.size.height")
+        ));
+    }
 
-        public void drawerDidOpen(NSNotification notification) {
-            Preferences.instance().setProperty("browser.logDrawer.isOpen", true);
-        }
+    public void drawerDidOpen(NSNotification notification) {
+        Preferences.instance().setProperty("browser.logDrawer.isOpen", true);
+    }
 
-        public void drawerWillClose(NSNotification notification) {
-            Preferences.instance().setProperty("browser.logDrawer.size.height",
-                    logDrawer.contentSize().height());
-        }
+    public void drawerWillClose(NSNotification notification) {
+        Preferences.instance().setProperty("browser.logDrawer.size.height",
+                logDrawer.contentSize().height.intValue());
+    }
 
-        public void drawerDidClose(NSNotification notification) {
-            Preferences.instance().setProperty("browser.logDrawer.isOpen", false);
-        }
-    };
+    public void drawerDidClose(NSNotification notification) {
+        Preferences.instance().setProperty("browser.logDrawer.isOpen", false);
+    }
 
     public void setLogDrawer(NSDrawer logDrawer) {
         this.logDrawer = logDrawer;
         this.transcript = new CDTranscriptController();
         this.logDrawer.setContentView(this.transcript.getLogView());
-        NSNotificationCenter.defaultCenter().addObserver(logDrawerNotifications,
-                new NSSelector("drawerWillOpen", new Class[]{NSNotification.class}),
+        NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                Foundation.selector("drawerWillOpen:"),
                 NSDrawer.DrawerWillOpenNotification,
                 this.logDrawer);
-        NSNotificationCenter.defaultCenter().addObserver(logDrawerNotifications,
-                new NSSelector("drawerDidOpen", new Class[]{NSNotification.class}),
+        NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                Foundation.selector("drawerDidOpen:"),
                 NSDrawer.DrawerDidOpenNotification,
                 this.logDrawer);
-        NSNotificationCenter.defaultCenter().addObserver(logDrawerNotifications,
-                new NSSelector("drawerWillClose", new Class[]{NSNotification.class}),
+        NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                Foundation.selector("drawerWillClose:"),
                 NSDrawer.DrawerWillCloseNotification,
                 this.logDrawer);
-        NSNotificationCenter.defaultCenter().addObserver(logDrawerNotifications,
-                new NSSelector("drawerDidClose", new Class[]{NSNotification.class}),
+        NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                Foundation.selector("drawerDidClose:"),
                 NSDrawer.DrawerDidCloseNotification,
                 this.logDrawer);
     }
@@ -912,79 +479,130 @@ public class CDBrowserController extends CDWindowController
      * @return The datasource of the currently selected browser view
      */
     public CDBrowserTableDataSource getSelectedBrowserModel() {
-        return (CDBrowserTableDataSource) this.getSelectedBrowserView().dataSource();
+        switch(this.browserSwitchView.selectedSegment()) {
+            case SWITCH_LIST_VIEW: {
+                return this.browserListModel;
+            }
+            case SWITCH_OUTLINE_VIEW: {
+                return this.browserOutlineModel;
+            }
+        }
+        log.fatal("No selected brower view");
+        return null;
     }
 
+    public AbstractBrowserTableDelegate<Path> getSelectedBrowserDelegate() {
+        switch(this.browserSwitchView.selectedSegment()) {
+            case SWITCH_LIST_VIEW: {
+                return this.browserListViewDelegate;
+            }
+            case SWITCH_OUTLINE_VIEW: {
+                return this.browserOutlineViewDelegate;
+            }
+        }
+        log.fatal("No selected brower view");
+        return null;
+    }
+
+    @Outlet
+    private NSMenu editMenu;
+    private EditMenuDelegate editMenuDelegate;
+
+    public void setEditMenu(NSMenu editMenu) {
+        this.editMenu = editMenu;
+        this.editMenuDelegate = new EditMenuDelegate();
+        this.editMenu.setDelegate(editMenuDelegate.id());
+    }
+
+    @Outlet
+    private NSMenu archiveMenu;
+    private ArchiveMenuDelegate archiveMenuDelegate;
+
+    public void setArchiveMenu(NSMenu archiveMenu) {
+        this.archiveMenu = archiveMenu;
+        this.archiveMenuDelegate = new ArchiveMenuDelegate();
+        this.archiveMenu.setDelegate(archiveMenuDelegate.id());
+    }
+
+    @Outlet
     private NSButton bonjourButton;
 
     public void setBonjourButton(NSButton bonjourButton) {
         this.bonjourButton = bonjourButton;
-        this.bonjourButton.setImage(CDIconCache.instance().iconForName("rendezvous", 16));
+        this.bonjourButton.setImage(CDIconCache.iconNamed("rendezvous", 16));
         this.setRecessedBezelStyle(this.bonjourButton);
-        this.bonjourButton.setTarget(this);
-        this.bonjourButton.setAction(new NSSelector("bookmarkButtonClicked", new Class[]{Object.class}));
+        this.bonjourButton.setTarget(this.id());
+        this.bonjourButton.setAction(Foundation.selector("bookmarkButtonClicked:"));
     }
 
+    @Outlet
     private NSButton historyButton;
 
     public void setHistoryButton(NSButton historyButton) {
         this.historyButton = historyButton;
-        this.historyButton.setImage(CDIconCache.instance().iconForName("history", 16));
+        this.historyButton.setImage(CDIconCache.iconNamed("history", 16));
         this.setRecessedBezelStyle(this.historyButton);
-        this.historyButton.setTarget(this);
-        this.historyButton.setAction(new NSSelector("bookmarkButtonClicked", new Class[]{Object.class}));
+        this.historyButton.setTarget(this.id());
+        this.historyButton.setAction(Foundation.selector("bookmarkButtonClicked:"));
     }
 
+    @Outlet
     private NSButton bookmarkButton;
 
     public void setBookmarkButton(NSButton bookmarkButton) {
         this.bookmarkButton = bookmarkButton;
-        this.bookmarkButton.setImage(CDIconCache.instance().iconForName("bookmarks"));
+        this.bookmarkButton.setImage(CDIconCache.iconNamed("bookmarks", 20, 16));
         this.setRecessedBezelStyle(this.bookmarkButton);
-        this.bookmarkButton.setTarget(this);
-        this.bookmarkButton.setAction(new NSSelector("bookmarkButtonClicked", new Class[]{Object.class}));
-        this.bookmarkButton.setState(NSCell.OnState); // Set as default selected bookmark source
+        this.bookmarkButton.setTarget(this.id());
+        this.bookmarkButton.setAction(Foundation.selector("bookmarkButtonClicked:"));
+        this.bookmarkButton.setState(NSCell.NSOnState); // Set as default selected bookmark source
     }
 
     public void bookmarkButtonClicked(final NSButton sender) {
         if(sender != bonjourButton) {
-            bonjourButton.setState(NSCell.OffState);
+            bonjourButton.setState(NSCell.NSOffState);
         }
         if(sender != historyButton) {
-            historyButton.setState(NSCell.OffState);
+            historyButton.setState(NSCell.NSOffState);
         }
         if(sender != bookmarkButton) {
-            bookmarkButton.setState(NSCell.OffState);
+            bookmarkButton.setState(NSCell.NSOffState);
         }
-        sender.setState(NSCell.OnState);
+        sender.setState(NSCell.NSOnState);
 
         this.updateBookmarkSource();
     }
 
     private void setRecessedBezelStyle(final NSButton b) {
-        b.setBezelStyle(13); //NSRecessedBezelStyle
-        b.setButtonType(NSButton.PushOnPushOff);
-        b.setImagePosition(NSCell.ImageLeft);
+        b.setBezelStyle(NSButton.NSRecessedBezelStyle);
+        b.setButtonType(NSButton.NSMomentaryPushButtonButton);
+        b.setImagePosition(NSCell.NSImageLeft);
         b.setFont(NSFont.boldSystemFontOfSize(11f));
         b.setShowsBorderOnlyWhileMouseInside(true);
-        b.sizeToFit();
     }
 
     private void updateBookmarkSource() {
-        if(bonjourButton.state() == NSCell.OnState) {
+        if(bonjourButton.state() == NSCell.NSOnState) {
             bookmarkModel.setSource(RendezvousCollection.defaultCollection());
         }
-        else if(historyButton.state() == NSCell.OnState) {
+        else if(historyButton.state() == NSCell.NSOnState) {
             bookmarkModel.setSource(HistoryCollection.defaultCollection());
         }
-        else if(bookmarkButton.state() == NSCell.OnState) {
+        else if(bookmarkButton.state() == NSCell.NSOnState) {
             bookmarkModel.setSource(HostCollection.defaultCollection());
         }
         bookmarkTableDelegate.selectionDidChange(null);
         this.setBookmarkFilter(null);
-        bookmarkTable.deselectAll(null);
-        bookmarkTable.reloadData();
+        this.reloadBookmarks();
         this.getFocus();
+    }
+
+    /**
+     * Reload bookmark table from currently selected model
+     */
+    public void reloadBookmarks() {
+        bookmarkTable.reloadData();
+        this.updateStatusLabel();
     }
 
     private NSSegmentedControl bookmarkSwitchView;
@@ -994,16 +612,19 @@ public class CDBrowserController extends CDWindowController
     public void setBookmarkSwitchView(NSSegmentedControl bookmarkSwitchView) {
         this.bookmarkSwitchView = bookmarkSwitchView;
         this.bookmarkSwitchView.setSegmentCount(1);
-        this.bookmarkSwitchView.setImage(NSImage.imageNamed("bookmarks.tiff"), SWITCH_BOOKMARK_VIEW);
-        final NSSegmentedCell cell = (NSSegmentedCell) this.bookmarkSwitchView.cell();
+        this.bookmarkSwitchView.setToolTip(Locale.localizedString("Bookmarks"));
+        final NSImage image = CDIconCache.iconNamed("bookmarks.tiff");
+        this.bookmarkSwitchView.setImage_forSegment(image, SWITCH_BOOKMARK_VIEW);
+        final NSSegmentedCell cell = Rococoa.cast(this.bookmarkSwitchView.cell(), NSSegmentedCell.class);
         cell.setTrackingMode(NSSegmentedCell.NSSegmentSwitchTrackingSelectAny);
-        cell.setControlSize(NSCell.RegularControlSize);
-        this.bookmarkSwitchView.setTarget(this);
-        this.bookmarkSwitchView.setAction(new NSSelector("bookmarkSwitchClicked", new Class[]{Object.class}));
-        this.bookmarkSwitchView.setSelected(true, SWITCH_BOOKMARK_VIEW);
+        cell.setControlSize(NSCell.NSRegularControlSize);
+        this.bookmarkSwitchView.setTarget(this.id());
+        this.bookmarkSwitchView.setAction(Foundation.selector("bookmarkSwitchClicked:"));
+        this.bookmarkSwitchView.setSelectedSegment(SWITCH_BOOKMARK_VIEW);
     }
 
-    public void bookmarkSwitchClicked(final Object sender) {
+    @Action
+    public void bookmarkSwitchClicked(final ID sender) {
         this.toggleBookmarks(this.getSelectedTabView() != TAB_BOOKMARKS);
     }
 
@@ -1012,7 +633,7 @@ public class CDBrowserController extends CDWindowController
      */
     public void toggleBookmarks(final boolean open) {
         log.debug("bookmarkSwitchClicked:" + open);
-        this.bookmarkSwitchView.setSelected(open, SWITCH_BOOKMARK_VIEW);
+        this.bookmarkSwitchView.setSelected_forSegment(open, SWITCH_BOOKMARK_VIEW);
         if(open) {
             // Display bookmarks
             this.browserTabView.selectTabViewItemAtIndex(TAB_BOOKMARKS);
@@ -1034,22 +655,28 @@ public class CDBrowserController extends CDWindowController
     public void setBrowserSwitchView(NSSegmentedControl browserSwitchView) {
         this.browserSwitchView = browserSwitchView;
         this.browserSwitchView.setSegmentCount(2); // list, outline
-        this.browserSwitchView.setImage(NSImage.imageNamed("list.tiff"), SWITCH_LIST_VIEW);
-        this.browserSwitchView.setImage(NSImage.imageNamed("outline.tiff"), SWITCH_OUTLINE_VIEW);
-        this.browserSwitchView.setTarget(this);
-        this.browserSwitchView.setAction(new NSSelector("browserSwitchButtonClicked", new Class[]{Object.class}));
-        final NSSegmentedCell cell = (NSSegmentedCell) this.browserSwitchView.cell();
+        final NSImage list = CDIconCache.iconNamed("list.tiff");
+        list.setTemplate(true);
+        this.browserSwitchView.setImage_forSegment(list, SWITCH_LIST_VIEW);
+        final NSImage outline = CDIconCache.iconNamed("outline.tiff");
+        outline.setTemplate(true);
+        this.browserSwitchView.setImage_forSegment(outline, SWITCH_OUTLINE_VIEW);
+        this.browserSwitchView.setTarget(this.id());
+        this.browserSwitchView.setAction(Foundation.selector("browserSwitchButtonClicked:"));
+        final NSSegmentedCell cell = Rococoa.cast(this.browserSwitchView.cell(), NSSegmentedCell.class);
         cell.setTrackingMode(NSSegmentedCell.NSSegmentSwitchTrackingSelectOne);
-        cell.setControlSize(NSCell.RegularControlSize);
-        this.browserSwitchView.setSelected(Preferences.instance().getInteger("browser.view"));
+        cell.setControlSize(NSCell.NSRegularControlSize);
+        this.browserSwitchView.setSelectedSegment(Preferences.instance().getInteger("browser.view"));
     }
 
+    @Action
     public void browserSwitchButtonClicked(final NSSegmentedControl sender) {
         this.browserSwitchClicked(sender.selectedSegment());
     }
 
+    @Action
     public void browserSwitchMenuClicked(final NSMenuItem sender) {
-        this.browserSwitchView.setSelected(true, sender.tag());
+        this.browserSwitchView.setSelectedSegment(sender.tag());
         this.browserSwitchClicked(sender.tag());
     }
 
@@ -1065,7 +692,7 @@ public class CDBrowserController extends CDWindowController
     }
 
     private void selectBrowser(int selected) {
-        this.browserSwitchView.setSelected(selected);
+        this.browserSwitchView.setSelectedSegment(selected);
         switch(selected) {
             case SWITCH_LIST_VIEW:
                 this.browserTabView.selectTabViewItemAtIndex(TAB_LIST_VIEW);
@@ -1076,27 +703,29 @@ public class CDBrowserController extends CDWindowController
         }
     }
 
-    private abstract class AbstractBrowserTableDelegate extends CDAbstractPathTableDelegate {
+    private abstract class AbstractBrowserOutlineViewDelegate<E> extends AbstractBrowserTableDelegate<E>
+            implements NSOutlineView.Delegate {
+    }
 
-        private Collection<Local> temporaryQuickLookFiles = new Collection<Local>() {
-            public void collectionItemRemoved(Local o) {
-                (o).delete(false);
-            }
-        };
+    private abstract class AbstractBrowserListViewDelegate<E> extends AbstractBrowserTableDelegate<E>
+            implements NSTableView.Delegate {
+    }
+
+    private abstract class AbstractBrowserTableDelegate<E> extends CDAbstractPathTableDelegate {
 
         public AbstractBrowserTableDelegate() {
             CDBrowserController.this.addListener(new CDWindowListener() {
                 public void windowWillClose() {
-                    if(QuickLook.isAvailable()) {
-                        if(QuickLook.isOpen()) {
-                            QuickLook.close();
+                    if(QuickLookFactory.instance().isAvailable()) {
+                        if(QuickLookFactory.instance().isOpen()) {
+                            QuickLookFactory.instance().close();
                         }
                     }
-                    temporaryQuickLookFiles.clear();
                 }
             });
         }
 
+        @Override
         public boolean isColumnEditable(NSTableColumn column) {
             if(Preferences.instance().getBoolean("browser.editable")) {
                 if(column.identifier().equals(CDBrowserTableDataSource.FILENAME_COLUMN)) {
@@ -1110,14 +739,15 @@ public class CDBrowserController extends CDWindowController
             return false;
         }
 
-        public void tableRowDoubleClicked(final Object sender) {
+        @Override
+        public void tableRowDoubleClicked(final ID sender) {
             CDBrowserController.this.insideButtonClicked(sender);
         }
 
-        public void spaceKeyPressed(final Object sender) {
-            if(QuickLook.isAvailable()) {
-                if(QuickLook.isOpen()) {
-                    QuickLook.close();
+        public void spaceKeyPressed(final ID sender) {
+            if(QuickLookFactory.instance().isAvailable()) {
+                if(QuickLookFactory.instance().isOpen()) {
+                    QuickLookFactory.instance().close();
                 }
                 else {
                     this.updateQuickLookSelection(
@@ -1127,68 +757,85 @@ public class CDBrowserController extends CDWindowController
             }
         }
 
+        /**
+         * @param selected
+         */
         private void updateQuickLookSelection(final Collection<Path> selected) {
-            if(QuickLook.isAvailable()) {
+            if(QuickLookFactory.instance().isAvailable()) {
                 final Collection<Path> downloads = new Collection<Path>();
                 for(Path path : selected) {
                     if(!path.attributes.isFile()) {
                         continue;
                     }
-                    final Local folder = new Local(new File(NSPathUtilities.temporaryDirectory(),
+                    final Local folder = LocalFactory.createLocal(new File(Preferences.instance().getProperty("tmp.dir"),
                             path.getParent().getAbsolute()));
                     folder.mkdir(true);
-                    path.setLocal(new Local(folder, path.getName()));
+                    path.setLocal(LocalFactory.createLocal(folder, path.getName()));
                     downloads.add(path);
                 }
                 if(downloads.size() > 0) {
                     background(new BrowserBackgroundAction(CDBrowserController.this) {
+                        final Collection<Local> previews = new Collection<Local>() {
+                            @Override
+                            public void collectionItemRemoved(Local o) {
+                                super.collectionItemRemoved(o);
+                                (o).delete(false);
+                            }
+                        };
+
                         public void run() {
                             for(Path download : downloads) {
                                 if(this.isCanceled()) {
                                     break;
                                 }
-                                if(download.getLocal().attributes.getSize() != download.attributes.getSize()) {
+                                if(!download.getLocal().exists()) {
                                     download.download(true);
+                                    if(download.getStatus().isComplete()) {
+                                        previews.add(download.getLocal());
+                                    }
+                                    else {
+                                        download.getLocal().delete(false);
+                                    }
+                                }
+                                else {
+                                    previews.add(download.getLocal());
                                 }
                             }
                         }
 
+                        @Override
                         public void cleanup() {
-                            final Collection<Local> previews = new Collection<Local>();
-                            for(Path download : downloads) {
-                                if(download.getLocal().attributes.getSize() == download.attributes.getSize()) {
-                                    previews.add(download.getLocal());
-                                }
+                            if(previews.isEmpty()) {
+                                return;
                             }
-                            // Keep references to delete later
-                            temporaryQuickLookFiles.addAll(previews);
+                            if(this.isCanceled()) {
+                                return;
+                            }
                             // Change files in Quick Look
-                            QuickLook.select((Local[]) previews.toArray(new Local[previews.size()]));
+                            QuickLookFactory.instance().select(previews);
                             // Open Quick Look Preview Panel
-                            QuickLook.open();
+                            QuickLookFactory.instance().open();
                             // Revert status label
-                            CDBrowserController.this.updateStatusLabel(null);
+                            CDBrowserController.this.updateStatusLabel();
                             // Restore the focus to our window to demo the selection changing, scrolling
                             // (left/right) and closing (space) functionality
                             CDBrowserController.this.window().makeKeyWindow();
                         }
 
+                        @Override
                         public String getActivity() {
-                            return NSBundle.localizedString("Quick Look", "Status", "");
+                            return Locale.localizedString("Quick Look", "Status");
                         }
                     });
                 }
             }
         }
 
-        public void enterKeyPressed(final Object sender) {
-            ;
-        }
-
-        public void deleteKeyPressed(final Object sender) {
+        public void deleteKeyPressed(final ID sender) {
             CDBrowserController.this.deleteFileButtonClicked(sender);
         }
 
+        @Override
         public void tableColumnClicked(NSTableView view, NSTableColumn tableColumn) {
             List<Path> selected = CDBrowserController.this.getSelectedPaths();
             if(this.selectedColumnIdentifier().equals(tableColumn.identifier())) {
@@ -1202,12 +849,13 @@ public class CDBrowserController extends CDWindowController
             }
             this.setBrowserColumnSortingIndicator(
                     this.isSortedAscending() ?
-                            NSImage.imageNamed("NSAscendingSortIndicator") :
-                            NSImage.imageNamed("NSDescendingSortIndicator"),
-                    tableColumn.identifier().toString());
+                            CDIconCache.iconNamed("NSAscendingSortIndicator") :
+                            CDIconCache.iconNamed("NSDescendingSortIndicator"),
+                    tableColumn.identifier());
             reloadData(selected);
         }
 
+        @Override
         public void selectionDidChange(NSNotification notification) {
             final Collection<Path> selected = getSelectedPaths();
             if(1 == selected.size()) {
@@ -1218,7 +866,7 @@ public class CDBrowserController extends CDWindowController
                 }
             }
             if(Preferences.instance().getBoolean("browser.info.isInspector")) {
-                if(inspector != null && inspector.window() != null && inspector.window().isVisible()) {
+                if(inspector != null && inspector.isVisible()) {
                     if(selected.size() > 0) {
                         background(new BrowserBackgroundAction(CDBrowserController.this) {
                             public void run() {
@@ -1232,63 +880,101 @@ public class CDBrowserController extends CDWindowController
                                 }
                             }
 
+                            @Override
                             public void cleanup() {
-                                inspector.setFiles(selected);
+                                if(inspector != null) {
+                                    inspector.setFiles(selected);
+                                }
                             }
                         });
                     }
                 }
             }
-            if(QuickLook.isOpen()) {
+            if(QuickLookFactory.instance().isOpen()) {
                 this.updateQuickLookSelection(selected);
             }
         }
 
         private void setBrowserColumnSortingIndicator(NSImage image, String columnIdentifier) {
             if(browserListView.tableColumnWithIdentifier(columnIdentifier) != null) {
-                browserListView.setIndicatorImage(image, browserListView.tableColumnWithIdentifier(columnIdentifier));
+                browserListView.setIndicatorImage_inTableColumn(image, browserListView.tableColumnWithIdentifier(columnIdentifier));
             }
             if(browserOutlineView.tableColumnWithIdentifier(columnIdentifier) != null) {
-                browserOutlineView.setIndicatorImage(image, browserOutlineView.tableColumnWithIdentifier(columnIdentifier));
+                browserOutlineView.setIndicatorImage_inTableColumn(image, browserOutlineView.tableColumnWithIdentifier(columnIdentifier));
             }
         }
     }
 
-    private CDBrowserOutlineViewModel browserOutlineModel;
-    private NSOutlineView browserOutlineView; // IBOutlet
-    private CDTableDelegate<Path> browserOutlineViewDelegate;
+    /**
+     * QuickLook support for 10.6+
+     *
+     * @param panel The Preview Panel looking for a controller.
+     * @return
+     * @ Sent to each object in the responder chain to find a controller.
+     */
+    public boolean acceptsPreviewPanelControl(QLPreviewPanel panel) {
+        log.debug("acceptsPreviewPanelControl");
+        return true;
+    }
 
-    public void setBrowserOutlineView(NSOutlineView browserOutlineView) {
-        this.browserOutlineView = browserOutlineView;
+    /**
+     * QuickLook support for 10.6+
+     * The receiver should setup the preview panel (data source, delegate, binding, etc.) here.
+     *
+     * @param panel The Preview Panel the receiver will control.
+     * @ Sent to the object taking control of the Preview Panel.
+     */
+    public void beginPreviewPanelControl(QLPreviewPanel panel) {
+        log.debug("beginPreviewPanelControl");
+        QuickLookFactory.instance().willBeginQuickLook();
+    }
+
+    /**
+     * QuickLook support for 10.6+
+     * The receiver should unsetup the preview panel (data source, delegate, binding, etc.) here.
+     *
+     * @param panel The Preview Panel that the receiver will stop controlling.
+     * @ Sent to the object in control of the Preview Panel just before stopping its control.
+     */
+    public void endPreviewPanelControl(QLPreviewPanel panel) {
+        log.debug("endPreviewPanelControl");
+        QuickLookFactory.instance().didEndQuickLook();
+    }
+
+    private CDBrowserOutlineViewModel browserOutlineModel;
+    @Outlet
+    private NSOutlineView browserOutlineView;
+    private AbstractBrowserTableDelegate<Path> browserOutlineViewDelegate;
+
+    public void setBrowserOutlineView(NSOutlineView view) {
+        browserOutlineView = view;
         // receive drag events from types
-        this.browserOutlineView.registerForDraggedTypes(new NSArray(new Object[]{
-                CDPasteboards.TransferPasteboardType,
+        browserOutlineView.registerForDraggedTypes(NSArray.arrayWithObjects(
                 NSPasteboard.URLPboardType,
                 NSPasteboard.FilenamesPboardType, //accept files dragged from the Finder for uploading
-                NSPasteboard.FilesPromisePboardType} //accept file promises made myself but then interpret them as TransferPasteboardType
+                NSPasteboard.FilesPromisePboardType //accept file promises made myself but then interpret them as TransferPasteboardType
         ));
 
         // setting appearance attributes
-        this.browserOutlineView.setRowHeight(new NSLayoutManager().defaultLineHeightForFont(
-                NSFont.systemFontOfSize(Preferences.instance().getFloat("browser.font.size"))) + 2);
-        this._updateBrowserAttributes(this.browserOutlineView);
+        final NSLayoutManager l = NSLayoutManager.layoutManager();
+        browserOutlineView.setRowHeight(new CGFloat(l.defaultLineHeightForFont(
+                NSFont.systemFontOfSize(Preferences.instance().getFloat("browser.font.size"))).intValue() + 2));
+        this._updateBrowserAttributes(browserOutlineView);
         // selection properties
-        this.browserOutlineView.setAllowsMultipleSelection(true);
-        this.browserOutlineView.setAllowsEmptySelection(true);
-        this.browserOutlineView.setAllowsColumnResizing(true);
-        this.browserOutlineView.setAllowsColumnSelection(false);
-        this.browserOutlineView.setAllowsColumnReordering(true);
+        browserOutlineView.setAllowsMultipleSelection(true);
+        browserOutlineView.setAllowsEmptySelection(true);
+        browserOutlineView.setAllowsColumnResizing(true);
+        browserOutlineView.setAllowsColumnSelection(false);
+        browserOutlineView.setAllowsColumnReordering(true);
 
-        this.browserOutlineView.setDataSource(this.browserOutlineModel = new CDBrowserOutlineViewModel(this));
-        this.browserOutlineView.setDelegate(this.browserOutlineViewDelegate = new AbstractBrowserTableDelegate() {
-
-            public void enterKeyPressed(final Object sender) {
+        browserOutlineView.setDataSource((browserOutlineModel = new CDBrowserOutlineViewModel(this)).id());
+        browserOutlineView.setDelegate((browserOutlineViewDelegate = new AbstractBrowserOutlineViewDelegate<Path>() {
+            public void enterKeyPressed(final ID sender) {
                 if(Preferences.instance().getBoolean("browser.enterkey.rename")) {
-                    if(CDBrowserController.this.browserOutlineView.numberOfSelectedRows() == 1) {
-                        CDBrowserController.this.browserOutlineView.editLocation(
-                                CDBrowserController.this.browserOutlineView.columnWithIdentifier(CDBrowserTableDataSource.FILENAME_COLUMN),
-                                CDBrowserController.this.browserOutlineView.selectedRow(),
-                                null, true);
+                    if(browserOutlineView.numberOfSelectedRows().intValue() == 1) {
+                        browserOutlineView.editRow(
+                                browserOutlineView.columnWithIdentifier(CDBrowserTableDataSource.FILENAME_COLUMN),
+                                browserOutlineView.selectedRow(), true);
                     }
                 }
                 else {
@@ -1299,42 +985,40 @@ public class CDBrowserController extends CDWindowController
             /**
              * @see NSOutlineView.Delegate
              */
-            public void outlineViewWillDisplayCell(NSOutlineView outlineView, NSCell cell,
-                                                   NSTableColumn tableColumn, Path item) {
-                final String identifier = (String) tableColumn.identifier();
-                if(item != null) {
-                    if(identifier.equals(CDBrowserTableDataSource.FILENAME_COLUMN)) {
-                        cell.setEditable(item.isRenameSupported());
-                        ((CDOutlineCell) cell).setIcon(browserOutlineModel.iconForPath(item));
+            public void outlineView_willDisplayCell_forTableColumn_item(NSOutlineView view, NSTextFieldCell cell,
+                                                                        NSTableColumn tableColumn, NSObject item) {
+                if(tableColumn.identifier().equals(CDBrowserTableDataSource.FILENAME_COLUMN)) {
+                    final Path path = lookup(new OutlinePathReference(item));
+                    if(null == path) {
+                        return;
                     }
-                    if(cell instanceof NSTextFieldCell) {
-                        if(!CDBrowserController.this.isConnected()) {// || CDBrowserController.this.activityRunning) {
-                            ((NSTextFieldCell) cell).setTextColor(NSColor.disabledControlTextColor());
-                        }
-                        else {
-                            ((NSTextFieldCell) cell).setTextColor(NSColor.controlTextColor());
-                        }
-                    }
+                    cell.setEditable(path.isRenameSupported());
+                    (Rococoa.cast(cell, CDOutlineCell.class)).setIcon(browserOutlineModel.iconForPath(path));
+                }
+                if(!CDBrowserController.this.isConnected()) {
+                    cell.setTextColor(NSColor.disabledControlTextColor());
+                }
+                else {
+                    cell.setTextColor(NSColor.controlTextColor());
                 }
             }
 
             /**
              * @see NSOutlineView.Delegate
              */
-            public boolean outlineViewShouldExpandItem(final NSOutlineView view, final Path item) {
-                log.debug("outlineViewShouldExpandItem:" + item);
+            public boolean outlineView_shouldExpandItem(final NSOutlineView view, final NSObject item) {
                 NSEvent event = NSApplication.sharedApplication().currentEvent();
                 if(event != null) {
-                    if(NSEvent.LeftMouseDragged == event.type()) {
-                        final int draggingColumn = view.columnAtPoint(view.convertPointFromView(event.locationInWindow(), null));
-                        if(draggingColumn != 0) {
-                            log.debug("Returning false to #outlineViewShouldExpandItem for column:" + draggingColumn);
-                            // See ticket #60
+                    if(NSEvent.NSLeftMouseDragged == event.type()) {
+                        if(!Preferences.instance().getBoolean("browser.view.autoexpand")) {
+                            log.debug("Returning false to #outlineViewShouldExpandItem while dragging because browser.view.autoexpand == false");
+                            // See tickets #98 and #633
                             return false;
                         }
-                        if(!Preferences.instance().getBoolean("browser.view.autoexpand")) {
-                            log.debug("Returning false to #outlineViewShouldExpandItem:" + item.getName() + " while dragging because browser.view.autoexpand == false");
-                            // See tickets #98 and #633
+                        final NSInteger draggingColumn = view.columnAtPoint(view.convertPoint_fromView(event.locationInWindow(), null));
+                        if(draggingColumn.intValue() != 0) {
+                            log.debug("Returning false to #outlineViewShouldExpandItem for column:" + draggingColumn);
+                            // See ticket #60
                             return false;
                         }
                     }
@@ -1343,88 +1027,66 @@ public class CDBrowserController extends CDWindowController
             }
 
             /**
-             * @see NSOutlineView.Notifications
+             * @see NSOutlineView.Delegate
              */
             public void outlineViewItemDidExpand(NSNotification notification) {
-                updateStatusLabel(null);
+                updateStatusLabel();
             }
 
             /**
-             * @see NSOutlineView.Notifications
+             * @see NSOutlineView.Delegate
              */
             public void outlineViewItemDidCollapse(NSNotification notification) {
-                updateStatusLabel(null);
+                updateStatusLabel();
             }
-        });
-        NSSelector setResizableMaskSelector = new NSSelector("setResizingMask", new Class[]{int.class});
+        }).id());
         {
-            NSTableColumn c = new NSTableColumn();
-            c.headerCell().setStringValue(NSBundle.localizedString("Filename", "A column in the browser"));
-            c.setIdentifier(CDBrowserTableDataSource.FILENAME_COLUMN);
-            c.setMinWidth(100f);
-            c.setWidth(250f);
-            c.setMaxWidth(1000f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask | NSTableColumn.UserResizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
-            NSTextFieldCell cell = new CDOutlineCell() {
-                public void selectAndEditWithFrameInView(NSRect rect, NSView view, NSText text, Object object, int selStart, int selLength) {
-                    super.selectAndEditWithFrameInView(new NSRect(rect.x() + 20, rect.y(), rect.width() - 20, rect.height()),
-                            view, text, object, selStart, selLength);
-                }
-
-                public void editWithFrameInView(NSRect rect, NSView view, NSText text, Object object, NSEvent event) {
-                    super.editWithFrameInView(new NSRect(rect.x() + 20, rect.y(), rect.width() - 20, rect.height()),
-                            view, text, object, event);
-                }
-            };
-            {
-                cell.setTarget(browserOutlineView.target());
-                cell.setAction(browserOutlineView.action());
-            }
-            c.setDataCell(cell);
+            NSTableColumn c = browserOutlineColumnsFactory.create(CDBrowserTableDataSource.FILENAME_COLUMN);
+            c.headerCell().setStringValue(Locale.localizedString("Filename"));
+            c.setMinWidth(new CGFloat(100));
+            c.setWidth(new CGFloat(250));
+            c.setMaxWidth(new CGFloat(1000));
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask | NSTableColumn.NSTableColumnUserResizingMask);
+            c.setDataCell(outlineCellPrototype);
             this.browserOutlineView.addTableColumn(c);
             this.browserOutlineView.setOutlineTableColumn(c);
         }
     }
 
     private CDBrowserListViewModel browserListModel;
-    private NSTableView browserListView; // IBOutlet
-    private CDTableDelegate<Path> browserListViewDelegate;
+    @Outlet
+    private NSTableView browserListView;
+    private AbstractBrowserTableDelegate<Path> browserListViewDelegate;
 
     public void setBrowserListView(NSTableView view) {
-        this.browserListView = view;
+        browserListView = view;
         // receive drag events from types
-        this.browserListView.registerForDraggedTypes(new NSArray(new Object[]{
-                CDPasteboards.TransferPasteboardType,
+        browserListView.registerForDraggedTypes(NSArray.arrayWithObjects(
                 NSPasteboard.URLPboardType,
                 NSPasteboard.FilenamesPboardType, //accept files dragged from the Finder for uploading
-                NSPasteboard.FilesPromisePboardType} //accept file promises made myself but then interpret them as TransferPasteboardType
+                NSPasteboard.FilesPromisePboardType //accept file promises made myself but then interpret them as TransferPasteboardType
         ));
 
         // setting appearance attributes
-        this.browserListView.setRowHeight(new NSLayoutManager().defaultLineHeightForFont(
-                NSFont.systemFontOfSize(Preferences.instance().getFloat("browser.font.size"))) + 2);
-        this._updateBrowserAttributes(this.browserListView);
+        final NSLayoutManager l = NSLayoutManager.layoutManager();
+        browserListView.setRowHeight(new CGFloat(l.defaultLineHeightForFont(
+                NSFont.systemFontOfSize(Preferences.instance().getFloat("browser.font.size"))).intValue() + 2));
+        this._updateBrowserAttributes(browserListView);
         // selection properties
-        this.browserListView.setAllowsMultipleSelection(true);
-        this.browserListView.setAllowsEmptySelection(true);
-        this.browserListView.setAllowsColumnResizing(true);
-        this.browserListView.setAllowsColumnSelection(false);
-        this.browserListView.setAllowsColumnReordering(true);
+        browserListView.setAllowsMultipleSelection(true);
+        browserListView.setAllowsEmptySelection(true);
+        browserListView.setAllowsColumnResizing(true);
+        browserListView.setAllowsColumnSelection(false);
+        browserListView.setAllowsColumnReordering(true);
 
-        this.browserListView.setDataSource(this.browserListModel = new CDBrowserListViewModel(this));
-        this.browserListView.setDelegate(this.browserListViewDelegate = new AbstractBrowserTableDelegate() {
-            public void enterKeyPressed(final Object sender) {
+        browserListView.setDataSource((browserListModel = new CDBrowserListViewModel(this)).id());
+        browserListView.setDelegate((browserListViewDelegate = new AbstractBrowserListViewDelegate<Path>() {
+            public void enterKeyPressed(final ID sender) {
                 if(Preferences.instance().getBoolean("browser.enterkey.rename")) {
-                    if(CDBrowserController.this.browserListView.numberOfSelectedRows() == 1) {
-                        CDBrowserController.this.browserListView.editLocation(
-                                CDBrowserController.this.browserListView.columnWithIdentifier(CDBrowserTableDataSource.FILENAME_COLUMN),
-                                CDBrowserController.this.browserListView.selectedRow(),
-                                null, true);
+                    if(browserListView.numberOfSelectedRows().intValue() == 1) {
+                        browserListView.editRow(
+                                browserListView.columnWithIdentifier(CDBrowserTableDataSource.FILENAME_COLUMN),
+                                browserListView.selectedRow(), true);
                     }
                 }
                 else {
@@ -1432,13 +1094,13 @@ public class CDBrowserController extends CDWindowController
                 }
             }
 
-            public void tableViewWillDisplayCell(NSTableView view, NSTextFieldCell cell, NSTableColumn tableColumn, int row) {
-                final String identifier = (String) tableColumn.identifier();
+            public void tableView_willDisplayCell_forTableColumn_row(NSTableView view, NSTextFieldCell cell, NSTableColumn tableColumn, NSInteger row) {
+                final String identifier = tableColumn.identifier();
                 if(identifier.equals(CDBrowserTableDataSource.FILENAME_COLUMN)) {
-                    final Path item = browserListModel.childs(CDBrowserController.this.workdir()).get(row);
+                    final Path item = browserListModel.childs(CDBrowserController.this.workdir()).get(row.intValue());
                     cell.setEditable(item.isRenameSupported());
                 }
-                if(cell instanceof NSTextFieldCell) {
+                if(cell.isKindOfClass(Foundation.getClass(NSTextFieldCell.class.getSimpleName()))) {
                     if(!CDBrowserController.this.isConnected()) {// || CDBrowserController.this.activityRunning) {
                         cell.setTextColor(NSColor.disabledControlTextColor());
                     }
@@ -1447,55 +1109,26 @@ public class CDBrowserController extends CDWindowController
                     }
                 }
             }
-
-            public String tableViewToolTipForCell(NSTableView view, NSCell cell, NSMutableRect rect,
-                                                  NSTableColumn tc, int row, NSPoint mouseLocation) {
-                if(row < browserListModel.childs(CDBrowserController.this.workdir()).size()) {
-                    Path p = browserListModel.childs(CDBrowserController.this.workdir()).get(row);
-                    return this.tooltip(p);
-                }
-                return null;
-            }
-        });
-        NSSelector setResizableMaskSelector
-                = new NSSelector("setResizingMask", new Class[]{int.class});
+        }).id());
         {
-            NSTableColumn c = new NSTableColumn();
-            c.setIdentifier(CDBrowserTableDataSource.ICON_COLUMN);
+            NSTableColumn c = browserListColumnsFactory.create(CDBrowserTableDataSource.ICON_COLUMN);
             c.headerCell().setStringValue("");
-            c.setMinWidth(20f);
-            c.setWidth(20f);
-            c.setMaxWidth(20f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
-            c.setDataCell(new NSImageCell());
-            c.dataCell().setAlignment(NSText.CenterTextAlignment);
-            this.browserListView.addTableColumn(c);
+            c.setMinWidth((20));
+            c.setWidth((20));
+            c.setMaxWidth((20));
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask);
+            c.setDataCell(imageCellPrototype);
+            c.dataCell().setAlignment(NSText.NSCenterTextAlignment);
+            browserListView.addTableColumn(c);
         }
         {
-            NSTableColumn c = new NSTableColumn();
-            c.headerCell().setStringValue(NSBundle.localizedString("Filename", "A column in the browser"));
-            c.setIdentifier(CDBrowserTableDataSource.FILENAME_COLUMN);
-            c.setMinWidth(100f);
-            c.setWidth(250f);
-            c.setMaxWidth(1000f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask | NSTableColumn.UserResizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
-            NSTextFieldCell cell = new NSTextFieldCell();
-            {
-                cell.setEditable(true); //to enable inline renaming of files
-                cell.setTarget(view.target());
-                cell.setAction(view.action());
-            }
-            c.setDataCell(cell);
+            NSTableColumn c = browserListColumnsFactory.create(CDBrowserTableDataSource.FILENAME_COLUMN);
+            c.headerCell().setStringValue(Locale.localizedString("Filename"));
+            c.setMinWidth((100));
+            c.setWidth((250));
+            c.setMaxWidth((1000));
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask | NSTableColumn.NSTableColumnUserResizingMask);
+            c.setDataCell(filenameCellPrototype);
             this.browserListView.addTableColumn(c);
         }
     }
@@ -1503,247 +1136,207 @@ public class CDBrowserController extends CDWindowController
     protected void _updateBrowserAttributes(NSTableView tableView) {
         tableView.setUsesAlternatingRowBackgroundColors(Preferences.instance().getBoolean("browser.alternatingRows"));
         if(Preferences.instance().getBoolean("browser.horizontalLines") && Preferences.instance().getBoolean("browser.verticalLines")) {
-            tableView.setGridStyleMask(NSTableView.SolidHorizontalGridLineMask | NSTableView.SolidVerticalGridLineMask);
+            tableView.setGridStyleMask(new NSUInteger(NSTableView.NSTableViewSolidHorizontalGridLineMask.intValue() | NSTableView.NSTableViewSolidVerticalGridLineMask.intValue()));
         }
         else if(Preferences.instance().getBoolean("browser.verticalLines")) {
-            tableView.setGridStyleMask(NSTableView.SolidVerticalGridLineMask);
+            tableView.setGridStyleMask(NSTableView.NSTableViewSolidVerticalGridLineMask);
         }
         else if(Preferences.instance().getBoolean("browser.horizontalLines")) {
-            tableView.setGridStyleMask(NSTableView.SolidHorizontalGridLineMask);
+            tableView.setGridStyleMask(NSTableView.NSTableViewSolidHorizontalGridLineMask);
         }
         else {
-            tableView.setGridStyleMask(NSTableView.GridNone);
+            tableView.setGridStyleMask(NSTableView.NSTableViewGridNone);
         }
     }
 
     protected void _updateBookmarkCell() {
         final int size = Preferences.instance().getInteger("bookmark.icon.size");
         if(CDBookmarkCell.SMALL_BOOKMARK_SIZE == size) {
-            this.bookmarkTable.setRowHeight(18);
+            bookmarkTable.setRowHeight(new CGFloat(18));
         }
         if(CDBookmarkCell.MEDIUM_BOOKMARK_SIZE == size) {
-            this.bookmarkTable.setRowHeight(45);
+            bookmarkTable.setRowHeight(new CGFloat(45));
         }
         if(CDBookmarkCell.LARGE_BOOKMARK_SIZE == size) {
-            this.bookmarkTable.setRowHeight(70);
+            bookmarkTable.setRowHeight(new CGFloat(70));
         }
-        final int width = (int) (size * 1.5);
-        final NSTableColumn c = this.bookmarkTable.tableColumnWithIdentifier(CDBookmarkTableDataSource.ICON_COLUMN);
+        final double width = size * 1.5;
+        final NSTableColumn c = bookmarkTable.tableColumnWithIdentifier(CDBookmarkTableDataSource.ICON_COLUMN);
         c.setMinWidth(width);
-        c.setWidth(width);
         c.setMaxWidth(width);
-        this.bookmarkTable.sizeToFit();
-        this.bookmarkTable.reloadData();
+        c.setWidth(width);
+    }
+
+    private final NSTextFieldCell outlineCellPrototype = CDOutlineCell.outlineCell();
+    private final NSImageCell imageCellPrototype = NSImageCell.imageCell();
+    private final NSTextFieldCell textCellPrototype = NSTextFieldCell.textFieldCell();
+    private final NSTextFieldCell filenameCellPrototype = NSTextFieldCell.textFieldCell();
+
+    private final TableColumnFactory browserListColumnsFactory = new TableColumnFactory();
+    private final TableColumnFactory browserOutlineColumnsFactory = new TableColumnFactory();
+    private final TableColumnFactory bookmarkTableColumnFactory = new TableColumnFactory();
+
+    private static class TableColumnFactory extends HashMap<String, NSTableColumn> {
+        private NSTableColumn create(String identifier) {
+            if(!this.containsKey(identifier)) {
+                this.put(identifier, NSTableColumn.tableColumnWithIdentifier(identifier));
+            }
+            return this.get(identifier);
+        }
     }
 
     protected void _updateBrowserColumns(NSTableView table) {
-        NSSelector setResizableMaskSelector
-                = new NSSelector("setResizingMask", new Class[]{int.class});
         table.removeTableColumn(table.tableColumnWithIdentifier(CDBrowserTableDataSource.SIZE_COLUMN));
         if(Preferences.instance().getBoolean("browser.columnSize")) {
-            NSTableColumn c = new NSTableColumn();
-            c.headerCell().setStringValue(NSBundle.localizedString("Size", "A column in the browser"));
-            c.setIdentifier(CDBrowserTableDataSource.SIZE_COLUMN);
+            NSTableColumn c = browserListColumnsFactory.create(CDBrowserTableDataSource.SIZE_COLUMN);
+            c.headerCell().setStringValue(Locale.localizedString("Size"));
             c.setMinWidth(50f);
             c.setWidth(80f);
             c.setMaxWidth(150f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask | NSTableColumn.UserResizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
-            c.setDataCell(new NSTextFieldCell());
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask | NSTableColumn.NSTableColumnUserResizingMask);
+            c.setDataCell(textCellPrototype);
             table.addTableColumn(c);
         }
         table.removeTableColumn(table.tableColumnWithIdentifier(CDBrowserTableDataSource.MODIFIED_COLUMN));
         if(Preferences.instance().getBoolean("browser.columnModification")) {
-            NSTableColumn c = new NSTableColumn();
-            c.headerCell().setStringValue(NSBundle.localizedString("Modified", "A column in the browser"));
-            c.setIdentifier(CDBrowserTableDataSource.MODIFIED_COLUMN);
+            NSTableColumn c = browserListColumnsFactory.create(CDBrowserTableDataSource.MODIFIED_COLUMN);
+            c.headerCell().setStringValue(Locale.localizedString("Modified"));
             c.setMinWidth(100f);
-            c.setWidth(150f);
-            c.setMaxWidth(500f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask | NSTableColumn.UserResizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
-            c.setDataCell(new NSTextFieldCell());
+            c.setWidth(150);
+            c.setMaxWidth(500);
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask | NSTableColumn.NSTableColumnUserResizingMask);
+            c.setDataCell(textCellPrototype);
             table.addTableColumn(c);
         }
         table.removeTableColumn(table.tableColumnWithIdentifier(CDBrowserTableDataSource.OWNER_COLUMN));
         if(Preferences.instance().getBoolean("browser.columnOwner")) {
-            NSTableColumn c = new NSTableColumn();
-            c.headerCell().setStringValue(NSBundle.localizedString("Owner", "A column in the browser"));
-            c.setIdentifier(CDBrowserTableDataSource.OWNER_COLUMN);
-            c.setMinWidth(50f);
-            c.setWidth(80f);
-            c.setMaxWidth(500f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask | NSTableColumn.UserResizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
-            c.setDataCell(new NSTextFieldCell());
+            NSTableColumn c = browserListColumnsFactory.create(CDBrowserTableDataSource.OWNER_COLUMN);
+            c.headerCell().setStringValue(Locale.localizedString("Owner"));
+            c.setMinWidth(50);
+            c.setWidth(80);
+            c.setMaxWidth(500);
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask | NSTableColumn.NSTableColumnUserResizingMask);
+            c.setDataCell(textCellPrototype);
             table.addTableColumn(c);
         }
         table.removeTableColumn(table.tableColumnWithIdentifier(CDBrowserTableDataSource.GROUP_COLUMN));
         if(Preferences.instance().getBoolean("browser.columnGroup")) {
-            NSTableColumn c = new NSTableColumn();
-            c.headerCell().setStringValue(NSBundle.localizedString("Group", "A column in the browser"));
-            c.setIdentifier(CDBrowserTableDataSource.GROUP_COLUMN);
-            c.setMinWidth(50f);
-            c.setWidth(80f);
-            c.setMaxWidth(500f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask | NSTableColumn.UserResizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
-            c.setDataCell(new NSTextFieldCell());
+            NSTableColumn c = browserListColumnsFactory.create(CDBrowserTableDataSource.GROUP_COLUMN);
+            c.headerCell().setStringValue(Locale.localizedString("Group"));
+            c.setMinWidth(50);
+            c.setWidth(80);
+            c.setMaxWidth(500);
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask | NSTableColumn.NSTableColumnUserResizingMask);
+            c.setDataCell(textCellPrototype);
             table.addTableColumn(c);
         }
         table.removeTableColumn(table.tableColumnWithIdentifier(CDBrowserTableDataSource.PERMISSIONS_COLUMN));
         if(Preferences.instance().getBoolean("browser.columnPermissions")) {
-            NSTableColumn c = new NSTableColumn();
-            c.headerCell().setStringValue(NSBundle.localizedString("Permissions", "A column in the browser"));
-            c.setIdentifier(CDBrowserTableDataSource.PERMISSIONS_COLUMN);
-            c.setMinWidth(100f);
-            c.setWidth(100f);
-            c.setMaxWidth(800f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask | NSTableColumn.UserResizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
-            c.setDataCell(new NSTextFieldCell());
+            NSTableColumn c = browserListColumnsFactory.create(CDBrowserTableDataSource.PERMISSIONS_COLUMN);
+            c.headerCell().setStringValue(Locale.localizedString("Permissions"));
+            c.setMinWidth(100);
+            c.setWidth(100);
+            c.setMaxWidth(800);
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask | NSTableColumn.NSTableColumnUserResizingMask);
+            c.setDataCell(textCellPrototype);
             table.addTableColumn(c);
         }
         table.removeTableColumn(table.tableColumnWithIdentifier(CDBrowserTableDataSource.KIND_COLUMN));
         if(Preferences.instance().getBoolean("browser.columnKind")) {
-            NSTableColumn c = new NSTableColumn();
-            c.headerCell().setStringValue(NSBundle.localizedString("Kind", "A column in the browser"));
-            c.setIdentifier(CDBrowserTableDataSource.KIND_COLUMN);
-            c.setMinWidth(50f);
-            c.setWidth(80f);
-            c.setMaxWidth(500f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask | NSTableColumn.UserResizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
-            c.setDataCell(new NSTextFieldCell());
+            NSTableColumn c = browserListColumnsFactory.create(CDBrowserTableDataSource.KIND_COLUMN);
+            c.headerCell().setStringValue(Locale.localizedString("Kind"));
+            c.setMinWidth(50);
+            c.setWidth(80);
+            c.setMaxWidth(500);
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask | NSTableColumn.NSTableColumnUserResizingMask);
+            c.setDataCell(textCellPrototype);
             table.addTableColumn(c);
         }
-        table.setIndicatorImage(((CDTableDelegate) table.delegate()).isSortedAscending() ?
-                NSImage.imageNamed("NSAscendingSortIndicator") :
-                NSImage.imageNamed("NSDescendingSortIndicator"),
+        table.setIndicatorImage_inTableColumn((browserListViewDelegate).isSortedAscending() ?
+                CDIconCache.iconNamed("NSAscendingSortIndicator") :
+                CDIconCache.iconNamed("NSDescendingSortIndicator"),
                 table.tableColumnWithIdentifier(Preferences.instance().getProperty("browser.sort.column")));
-//        table.setAutosaveTableColumns(true);
+        table.setAutosaveTableColumns(true);
         table.sizeToFit();
         this.reloadData(false);
     }
 
     private CDBookmarkTableDataSource bookmarkModel;
 
-    private NSTableView bookmarkTable; // IBOutlet
+    private NSTableView bookmarkTable;
     private CDAbstractTableDelegate<Host> bookmarkTableDelegate;
 
     public void setBookmarkTable(NSTableView view) {
         this.bookmarkTable = view;
-        this.bookmarkTable.setDataSource(this.bookmarkModel = new CDBookmarkTableDataSource(
+        this.bookmarkTable.setDataSource((this.bookmarkModel = new CDBookmarkTableDataSource(
                 this, HostCollection.defaultCollection())
-        );
-        this.bookmarkTable.setDelegate(this.bookmarkTableDelegate = new CDAbstractTableDelegate<Host>() {
+        ).id());
+        this.bookmarkTable.setDelegate((this.bookmarkTableDelegate = new CDAbstractTableDelegate<Host>() {
             public String tooltip(Host bookmark) {
                 return bookmark.toURL();
             }
 
-            public void tableRowDoubleClicked(final Object sender) {
+            @Override
+            public void tableRowDoubleClicked(final ID sender) {
                 CDBrowserController.this.connectBookmarkButtonClicked(sender);
             }
 
-            public void enterKeyPressed(final Object sender) {
+            public void enterKeyPressed(final ID sender) {
                 this.tableRowDoubleClicked(sender);
             }
 
-            public void deleteKeyPressed(final Object sender) {
+            public void deleteKeyPressed(final ID sender) {
                 if(bookmarkModel.getSource().allowsDelete()) {
                     CDBrowserController.this.deleteBookmarkButtonClicked(sender);
                 }
             }
 
+            @Override
             public void tableColumnClicked(NSTableView view, NSTableColumn tableColumn) {
 
             }
 
+            @Override
             public void selectionDidChange(NSNotification notification) {
                 addBookmarkButton.setEnabled(bookmarkModel.getSource().allowsAdd());
-                final int selected = bookmarkTable.numberOfSelectedRows();
+                final int selected = bookmarkTable.numberOfSelectedRows().intValue();
                 editBookmarkButton.setEnabled(bookmarkModel.getSource().allowsEdit() && selected == 1);
                 deleteBookmarkButton.setEnabled(bookmarkModel.getSource().allowsDelete() && selected > 0);
             }
-        });
+        }).id());
         // receive drag events from types
-        this.bookmarkTable.registerForDraggedTypes(new NSArray(new Object[]
-                {
-                        NSPasteboard.URLPboardType,
-                        NSPasteboard.StringPboardType,
-                        NSPasteboard.FilenamesPboardType, //accept bookmark files dragged from the Finder
-                        NSPasteboard.FilesPromisePboardType,
-                        "HostPBoardType" //moving bookmarks
-                }));
+        this.bookmarkTable.registerForDraggedTypes(NSArray.arrayWithObjects(
+                NSPasteboard.URLPboardType,
+                NSPasteboard.StringPboardType,
+                NSPasteboard.FilenamesPboardType, //accept bookmark files dragged from the Finder
+                NSPasteboard.FilesPromisePboardType,
+                "HostPBoardType" //moving bookmarks
+        ));
 
-        NSSelector setResizableMaskSelector
-                = new NSSelector("setResizingMask", new Class[]{int.class});
         {
-            NSTableColumn c = new NSTableColumn();
-            c.setIdentifier(CDBookmarkTableDataSource.ICON_COLUMN);
+            NSTableColumn c = bookmarkTableColumnFactory.create(CDBookmarkTableDataSource.ICON_COLUMN);
             c.headerCell().setStringValue("");
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask);
-            }
-            else {
-                c.setResizable(false);
-            }
-            c.setDataCell(new NSImageCell());
+            c.setResizingMask(NSTableColumn.NSTableColumnNoResizing);
+            c.setDataCell(imageCellPrototype);
             this.bookmarkTable.addTableColumn(c);
         }
         {
-            NSTableColumn c = new NSTableColumn();
-            c.setIdentifier(CDBookmarkTableDataSource.BOOKMARK_COLUMN);
-            c.headerCell().setStringValue(NSBundle.localizedString("Bookmarks", "A column in the browser"));
-            c.setMinWidth(150f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
-            c.setDataCell(new CDBookmarkCell());
+            NSTableColumn c = bookmarkTableColumnFactory.create(CDBookmarkTableDataSource.BOOKMARK_COLUMN);
+            c.headerCell().setStringValue(Locale.localizedString("Bookmarks"));
+            c.setMinWidth(150);
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask);
+            c.setDataCell(CDBookmarkCell.bookmarkCell());
             this.bookmarkTable.addTableColumn(c);
         }
         {
-            NSTableColumn c = new NSTableColumn();
-            c.setIdentifier(CDBookmarkTableDataSource.STATUS_COLUMN);
+            NSTableColumn c = bookmarkTableColumnFactory.create(CDBookmarkTableDataSource.STATUS_COLUMN);
             c.headerCell().setStringValue("");
-            c.setMinWidth(20f);
-            c.setWidth(20f);
-            c.setMaxWidth(20f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask);
-            }
-            else {
-                c.setResizable(false);
-            }
-            c.setDataCell(new NSImageCell());
-            c.dataCell().setAlignment(NSText.CenterTextAlignment);
+            c.setMinWidth(40);
+            c.setWidth(40);
+            c.setMaxWidth(40);
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask);
+            c.setDataCell(imageCellPrototype);
+            c.dataCell().setAlignment(NSText.NSCenterTextAlignment);
             this.bookmarkTable.addTableColumn(c);
         }
 
@@ -1751,7 +1344,7 @@ public class CDBrowserController extends CDWindowController
 
         // setting appearance attributes
         this.bookmarkTable.setUsesAlternatingRowBackgroundColors(Preferences.instance().getBoolean("browser.alternatingRows"));
-        this.bookmarkTable.setGridStyleMask(NSTableView.SolidHorizontalGridLineMask);
+        this.bookmarkTable.setGridStyleMask(NSTableView.NSTableViewSolidHorizontalGridLineMask);
 
         // selection properties
         this.bookmarkTable.setAllowsMultipleSelection(true);
@@ -1760,114 +1353,53 @@ public class CDBrowserController extends CDWindowController
         this.bookmarkTable.setAllowsColumnSelection(false);
         this.bookmarkTable.setAllowsColumnReordering(false);
         this.bookmarkTable.sizeToFit();
-
-        HistoryCollection.defaultCollection().addListener(historyCollectionListener);
-        HostCollection.defaultCollection().addListener(bookmarkCollectionListener);
-        Rendezvous.instance().addListener(rendezvousCollectionListener);
     }
 
-    private final CollectionListener<Host> historyCollectionListener = new CollectionListener<Host>() {
-        public void collectionItemAdded(Host item) {
-            this.reloadBookmarks();
-        }
-
-        public void collectionItemRemoved(Host item) {
-            this.reloadBookmarks();
-        }
-
-        public void collectionItemChanged(Host item) {
-            this.reloadBookmarks();
-        }
-
-        private void reloadBookmarks() {
-            if(bookmarkModel.getSource().equals(HistoryCollection.defaultCollection())) {
-                bookmarkTable.deselectAll(null);
-                bookmarkTable.reloadData();
-            }
-        }
-    };
-
-    private final CollectionListener<Host> bookmarkCollectionListener = new CollectionListener<Host>() {
-        public void collectionItemAdded(Host item) {
-            this.reloadBookmarks();
-        }
-
-        public void collectionItemRemoved(Host item) {
-            this.reloadBookmarks();
-        }
-
-        public void collectionItemChanged(Host item) {
-            this.reloadBookmarks();
-        }
-
-        private void reloadBookmarks() {
-            if(bookmarkModel.getSource().equals(HostCollection.defaultCollection())) {
-                bookmarkTable.deselectAll(null);
-                bookmarkTable.reloadData();
-            }
-        }
-    };
-
-    private final RendezvousListener rendezvousCollectionListener = new RendezvousListener() {
-        public void serviceResolved(String servicename, String hostname) {
-            this.reloadBookmarks();
-        }
-
-        public void serviceLost(String servicename) {
-            this.reloadBookmarks();
-        }
-
-        private void reloadBookmarks() {
-            if(bookmarkModel.getSource().equals(RendezvousCollection.defaultCollection())) {
-                bookmarkTable.deselectAll(null);
-                bookmarkTable.reloadData();
-            }
-        }
-    };
-
+    @Outlet
     private NSPopUpButton actionPopupButton;
 
     public void setActionPopupButton(NSPopUpButton actionPopupButton) {
         this.actionPopupButton = actionPopupButton;
         this.actionPopupButton.setPullsDown(true);
         this.actionPopupButton.setAutoenablesItems(true);
-        this.actionPopupButton.itemAtIndex(0).setImage(NSImage.imageNamed("gear.tiff"));
+        this.actionPopupButton.itemAtIndex(0).setImage(CDIconCache.iconNamed("gear.tiff"));
     }
 
-    private NSComboBox quickConnectPopup; // IBOutlet
+    @Outlet
+    private NSComboBox quickConnectPopup;
 
-    private NSObject quickConnectPopupModel;
+    private ProxyController quickConnectPopupModel = new QuickConnectModel();
 
     public void setQuickConnectPopup(NSComboBox quickConnectPopup) {
         this.quickConnectPopup = quickConnectPopup;
-        this.quickConnectPopup.setTarget(this);
+        this.quickConnectPopup.setTarget(this.id());
         this.quickConnectPopup.setCompletes(true);
-        this.quickConnectPopup.setAction(new NSSelector("quickConnectSelectionChanged", new Class[]{Object.class}));
+        this.quickConnectPopup.setAction(Foundation.selector("quickConnectSelectionChanged:"));
         this.quickConnectPopup.setUsesDataSource(true);
-        this.quickConnectPopup.setDataSource(this.quickConnectPopupModel = new NSObject/*NSComboBox.DataSource*/() {
-            public int numberOfItemsInComboBox(final NSComboBox combo) {
-                return HostCollection.defaultCollection().size();
-            }
-
-            public String comboBoxObjectValueForItemAtIndex(final NSComboBox sender, final int row) {
-                if(row < numberOfItemsInComboBox(sender)) {
-                    return ((Host) HostCollection.defaultCollection().get(row)).getNickname();
-                }
-                return null;
-            }
-        });
-        NSNotificationCenter.defaultCenter().addObserver(this,
-                new NSSelector("quickConnectWillPopUp", new Class[]{Object.class}),
+        this.quickConnectPopup.setDataSource(quickConnectPopupModel.id());
+        NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                Foundation.selector("quickConnectWillPopUp:"),
                 NSComboBox.ComboBoxWillPopUpNotification,
                 this.quickConnectPopup);
         this.quickConnectWillPopUp(null);
     }
 
-    public void quickConnectWillPopUp(NSNotification notification) {
-        int size = HostCollection.defaultCollection().size();
-        this.quickConnectPopup.setNumberOfVisibleItems(size > 10 ? 10 : size);
+    private static class QuickConnectModel extends ProxyController implements NSComboBox.DataSource {
+        public NSInteger numberOfItemsInComboBox(final NSComboBox combo) {
+            return new NSInteger(HostCollection.defaultCollection().size());
+        }
+
+        public NSObject comboBox_objectValueForItemAtIndex(final NSComboBox sender, final NSInteger row) {
+            return NSString.stringWithString(HostCollection.defaultCollection().get(row.intValue()).getNickname());
+        }
     }
 
+    public void quickConnectWillPopUp(NSNotification notification) {
+        int size = HostCollection.defaultCollection().size();
+        this.quickConnectPopup.setNumberOfVisibleItems(size > 10 ? new NSInteger(10) : new NSInteger(size));
+    }
+
+    @Action
     public void quickConnectSelectionChanged(final NSControl sender) {
         if(null == sender) {
             return;
@@ -1878,8 +1410,7 @@ public class CDBrowserController extends CDWindowController
         }
         input = input.trim();
         // First look for equivalent bookmarks
-        for(Iterator<Host> iter = HostCollection.defaultCollection().iterator(); iter.hasNext();) {
-            Host h = iter.next();
+        for(Host h : (Iterable<Host>) HostCollection.defaultCollection()) {
             if(h.getNickname().equals(input)) {
                 this.mount(h);
                 return;
@@ -1889,81 +1420,15 @@ public class CDBrowserController extends CDWindowController
         this.mount(Host.parse(input));
     }
 
-//    private NSComboBox navigationPopup; // IBOutlet
-//
-//    private NSObject navigationPopupModel;
-//
-//    public void setNavigationPopup(NSComboBox navigationPopup) {
-//        this.navigationPopup = navigationPopup;
-//        this.navigationPopup.setCompletes(true);
-//        this.navigationPopup.setUsesDataSource(true);
-//        this.navigationPopup.setDataSource(this.navigationPopupModel = new NSObject()/*NSComboBox.DataSource*/ {
-//            private final Comparator comparator = new NullComparator();
-//            private final PathFilter filter = new PathFilter() {
-//                public boolean accept(AbstractPath p) {
-//                    return p.attributes.isDirectory();
-//                }
-//            };
-//
-//            /**
-//             * @see NSComboBox.DataSource
-//             */
-//            public int numberOfItemsInComboBox(NSComboBox combo) {
-//                if(!isMounted()) {
-//                    return 0;
-//                }
-//                return workdir().childs(comparator, filter).size();
-//            }
-//
-//            /**
-//             * @see NSComboBox.DataSource
-//             */
-//            public Object comboBoxObjectValueForItemAtIndex(final NSComboBox sender, final int row) {
-//                final List childs = workdir().childs(comparator, filter);
-//                final int size = childs.size();
-//                if(row < size) {
-//                    return ((Path)childs.get(row)).getAbsolute();
-//                }
-//                return null;
-//            }
-//        });
-//        this.navigationPopup.setTarget(this);
-//        this.navigationPopup.setAction(new NSSelector("navigationPopupSelectionChanged", new Class[]{Object.class}));
-//    }
-
-//    public void navigationPopupSelectionChanged(NSComboBox sender) {
-//        if(this.navigationPopup.stringValue().length() != 0) {
-//            this.background(new BrowserBackgroundAction() {
-//                final Path dir = (Path)workdir.clone();
-//                final String filename = navigationPopup.stringValue();
-//
-//                public void run() {
-//                    if (filename.charAt(0) != '/') {
-//                        dir.setPath(workdir.getAbsolute(), filename);
-//                    }
-//                    else {
-//                        dir.setPath(filename);
-//                    }
-//                    setWorkdir(dir);
-//                }
-//
-//                public void cleanup() {
-//                    if(workdir.getParent().equals(dir)) {
-//                        setSelectedPath(workdir);
-//                    }
-//                }
-//            });
-//        }
-//    }
-
-    private NSTextField searchField; // IBOutlet
+    @Outlet
+    private NSTextField searchField;
 
     public void setSearchField(NSTextField searchField) {
         this.searchField = searchField;
         this.searchField.setEnabled(false);
-        NSNotificationCenter.defaultCenter().addObserver(this,
-                new NSSelector("searchFieldTextDidChange", new Class[]{NSNotification.class}),
-                NSControl.ControlTextDidChangeNotification,
+        NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                Foundation.selector("searchFieldTextDidChange:"),
+                NSControl.NSControlTextDidChangeNotification,
                 this.searchField);
     }
 
@@ -1972,23 +1437,17 @@ public class CDBrowserController extends CDWindowController
      *
      * @param sender
      */
-    public void searchButtonClicked(final Object sender) {
-        this.window().makeFirstResponder(this.searchField);
+    @Action
+    public void searchButtonClicked(final ID sender) {
+        this.window().makeFirstResponder(searchField);
     }
 
     public void searchFieldTextDidChange(NSNotification notification) {
-        NSDictionary userInfo = notification.userInfo();
-        if(null != userInfo) {
-            Object o = userInfo.allValues().lastObject();
-            if(null != o) {
-                final String searchString = ((NSText) o).string();
-                if(this.getSelectedTabView() == TAB_BOOKMARKS) {
-                    this.setBookmarkFilter(searchString);
-                }
-                else { // TAB_LIST_VIEW || TAB_OUTLINE_VIEW
-                    this.setPathFilter(searchString);
-                }
-            }
+        if(this.getSelectedTabView() == TAB_BOOKMARKS) {
+            this.setBookmarkFilter(searchField.stringValue());
+        }
+        else { // TAB_LIST_VIEW || TAB_OUTLINE_VIEW
+            this.setPathFilter(searchField.stringValue());
         }
     }
 
@@ -2005,45 +1464,50 @@ public class CDBrowserController extends CDWindowController
                 }
             });
         }
-        this.bookmarkTable.reloadData();
+        this.reloadBookmarks();
     }
 
     // ----------------------------------------------------------
     // Manage Bookmarks
     // ----------------------------------------------------------
 
-    public void connectBookmarkButtonClicked(final Object sender) {
-        if(bookmarkTable.numberOfSelectedRows() == 1) {
-            final Host selected = (Host) bookmarkModel.getSource().get(bookmarkTable.selectedRow());
+    @Action
+    public void connectBookmarkButtonClicked(final ID sender) {
+        if(bookmarkTable.numberOfSelectedRows().intValue() == 1) {
+            final Host selected = bookmarkModel.getSource().get(bookmarkTable.selectedRow().intValue());
             this.mount(selected);
         }
     }
 
-    private NSButton editBookmarkButton; // IBOutlet
+    @Outlet
+    private NSButton editBookmarkButton;
 
     public void setEditBookmarkButton(NSButton editBookmarkButton) {
         this.editBookmarkButton = editBookmarkButton;
         this.editBookmarkButton.setEnabled(false);
-        this.editBookmarkButton.setTarget(this);
-        this.editBookmarkButton.setAction(new NSSelector("editBookmarkButtonClicked", new Class[]{Object.class}));
+        this.editBookmarkButton.setTarget(this.id());
+        this.editBookmarkButton.setAction(Foundation.selector("editBookmarkButtonClicked:"));
     }
 
-    public void editBookmarkButtonClicked(final Object sender) {
+    @Action
+    public void editBookmarkButtonClicked(final ID sender) {
         CDBookmarkController c = CDBookmarkController.Factory.create(
-                (Host) bookmarkModel.getSource().get(bookmarkTable.selectedRow())
+                bookmarkModel.getSource().get(bookmarkTable.selectedRow().intValue())
         );
         c.window().makeKeyAndOrderFront(null);
     }
 
-    private NSButton addBookmarkButton; // IBOutlet
+    @Outlet
+    private NSButton addBookmarkButton;
 
     public void setAddBookmarkButton(NSButton addBookmarkButton) {
         this.addBookmarkButton = addBookmarkButton;
-        this.addBookmarkButton.setTarget(this);
-        this.addBookmarkButton.setAction(new NSSelector("addBookmarkButtonClicked", new Class[]{Object.class}));
+        this.addBookmarkButton.setTarget(this.id());
+        this.addBookmarkButton.setAction(Foundation.selector("addBookmarkButtonClicked:"));
     }
 
-    public void addBookmarkButtonClicked(final Object sender) {
+    @Action
+    public void addBookmarkButtonClicked(final ID sender) {
         final Host item;
         if(this.isMounted()) {
             Path selected = this.getSelectedPath();
@@ -2063,46 +1527,48 @@ public class CDBrowserController extends CDWindowController
 
         bookmarkModel.setFilter(null);
         bookmarkModel.getSource().add(item);
-        final int index = bookmarkModel.getSource().lastIndexOf(item);
-        bookmarkTable.selectRow(index, false);
+        final int row = bookmarkModel.getSource().lastIndexOf(item);
+        final NSInteger index = new NSInteger(row);
+        bookmarkTable.selectRowIndexes(NSIndexSet.indexSetWithIndex(index), false);
         bookmarkTable.scrollRowToVisible(index);
-        CDBookmarkController c = CDBookmarkController.Factory.create(
-                (Host) bookmarkModel.getSource().get(index)
-        );
+        CDBookmarkController c = CDBookmarkController.Factory.create(item);
         c.window().makeKeyAndOrderFront(null);
     }
 
-    private NSButton deleteBookmarkButton; // IBOutlet
+    @Outlet
+    private NSButton deleteBookmarkButton;
 
     public void setDeleteBookmarkButton(NSButton deleteBookmarkButton) {
         this.deleteBookmarkButton = deleteBookmarkButton;
         this.deleteBookmarkButton.setEnabled(false);
-        this.deleteBookmarkButton.setTarget(this);
-        this.deleteBookmarkButton.setAction(new NSSelector("deleteBookmarkButtonClicked",
-                new Class[]{Object.class}));
+        this.deleteBookmarkButton.setTarget(this.id());
+        this.deleteBookmarkButton.setAction(Foundation.selector("deleteBookmarkButtonClicked:"));
     }
 
-    public void deleteBookmarkButtonClicked(final Object sender) {
-        final NSEnumerator iterator = bookmarkTable.selectedRowEnumerator();
-        int[] indexes = new int[bookmarkTable.numberOfSelectedRows()];
+    @Action
+    public void deleteBookmarkButtonClicked(final ID sender) {
+        final NSIndexSet iterator = bookmarkTable.selectedRowIndexes();
+        NSUInteger[] indexes = new NSUInteger[iterator.count().intValue()];
         int i = 0;
-        while(iterator.hasMoreElements()) {
-            indexes[i] = ((Number) iterator.nextElement()).intValue();
+        for(NSUInteger index = iterator.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = iterator.indexGreaterThanIndex(index)) {
+            indexes[i] = index;
             i++;
         }
         bookmarkTable.deselectAll(null);
         int j = 0;
         for(i = 0; i < indexes.length; i++) {
-            int row = indexes[i] - j;
-            bookmarkTable.selectRow(row, false);
-            bookmarkTable.scrollRowToVisible(row);
-            Host host = (Host) bookmarkModel.getSource().get(row);
-            switch(NSAlertPanel.runCriticalAlert(NSBundle.localizedString("Delete Bookmark", ""),
-                    NSBundle.localizedString("Do you want to delete the selected bookmark?", "")
+            int row = indexes[i].intValue() - j;
+            final NSInteger index = new NSInteger(row);
+            bookmarkTable.selectRowIndexes(NSIndexSet.indexSetWithIndex(index), false);
+            bookmarkTable.scrollRowToVisible(index);
+            Host host = bookmarkModel.getSource().get(row);
+            final NSAlert alert = NSAlert.alert(Locale.localizedString("Delete Bookmark"),
+                    Locale.localizedString("Do you want to delete the selected bookmark?")
                             + " (" + host.getNickname() + ")",
-                    NSBundle.localizedString("Delete", ""),
-                    NSBundle.localizedString("Cancel", ""),
-                    null)) {
+                    Locale.localizedString("Delete"),
+                    Locale.localizedString("Cancel"),
+                    null);
+            switch(alert.runModal()) {
                 case CDSheetCallback.DEFAULT_OPTION:
                     bookmarkModel.getSource().remove(row);
                     j++;
@@ -2120,27 +1586,15 @@ public class CDBrowserController extends CDWindowController
 
     private static final int NAVIGATION_UP_SEGMENT_BUTTON = 0;
 
-    private NSSegmentedControl navigationButton; // IBOutlet
-
-//    private NSMenu navigationBackMenu;
-//    private MenuDelegate navigationBackMenuDelegate;
-//    private NSMenu navigationForwardMenu;
-//    private MenuDelegate navigationForwardMenuDelegate;
+    private NSSegmentedControl navigationButton;
 
     public void setNavigationButton(NSSegmentedControl navigationButton) {
         this.navigationButton = navigationButton;
-        this.navigationButton.setTarget(this);
-        this.navigationButton.setAction(new NSSelector("navigationButtonClicked", new Class[]{Object.class}));
-
-//        this.navigationBackMenu = new NSMenu();
-//        this.navigationBackMenu.setDelegate(this.navigationBackMenuDelegate = new BackPathHistoryMenuDelegate(this));
-//        this.navigationButton.setMenu(this.navigationBackMenu, NAVIGATION_LEFT_SEGMENT_BUTTON);
-
-//        this.navigationForwardMenu = new NSMenu();
-//        this.navigationForwardMenu.setDelegate(this.navigationForwardMenuDelegate = new ForwardPathHistoryMenuDelegate(this));
-//        this.navigationButton.setMenu(this.navigationForwardMenu, NAVIGATION_RIGHT_SEGMENT_BUTTON);
+        this.navigationButton.setTarget(this.id());
+        this.navigationButton.setAction(Foundation.selector("navigationButtonClicked:"));
     }
 
+    @Action
     public void navigationButtonClicked(NSSegmentedControl sender) {
         switch(sender.selectedSegment()) {
             case NAVIGATION_LEFT_SEGMENT_BUTTON: {
@@ -2154,17 +1608,21 @@ public class CDBrowserController extends CDWindowController
         }
     }
 
+    @Action
     public void backButtonClicked(final NSSegmentedControl sender) {
         final Path selected = this.getPreviousPath();
         if(selected != null) {
             final Path previous = this.workdir();
-            this.setWorkdir(selected);
             if(previous.getParent().equals(selected)) {
-                this.setSelectedPath(previous);
+                this.setWorkdir(selected, previous);
+            }
+            else {
+                this.setWorkdir(selected);
             }
         }
     }
 
+    @Action
     public void forwardButtonClicked(final NSSegmentedControl sender) {
         final Path selected = this.getForwardPath();
         if(selected != null) {
@@ -2172,33 +1630,34 @@ public class CDBrowserController extends CDWindowController
         }
     }
 
-    private NSSegmentedControl upButton; // IBOutlet
+    @Outlet
+    private NSSegmentedControl upButton;
 
     public void setUpButton(NSSegmentedControl upButton) {
         this.upButton = upButton;
-        this.upButton.setTarget(this);
-        this.upButton.setAction(new NSSelector("upButtonClicked", new Class[]{Object.class}));
+        this.upButton.setTarget(this.id());
+        this.upButton.setAction(Foundation.selector("upButtonClicked:"));
     }
 
-    public void upButtonClicked(final Object sender) {
+    public void upButtonClicked(final ID sender) {
         final Path previous = this.workdir();
-        this.setWorkdir((Path) previous.getParent());
-        this.setSelectedPath(previous);
+        this.setWorkdir(previous.getParent(), previous);
     }
 
     private Path workdir;
 
-    private NSPopUpButton pathPopupButton; // IBOutlet
+    @Outlet
+    private NSPopUpButton pathPopupButton;
 
     public void setPathPopup(NSPopUpButton pathPopupButton) {
         this.pathPopupButton = pathPopupButton;
-        this.pathPopupButton.setTarget(this);
-        this.pathPopupButton.setAction(new NSSelector("pathPopupSelectionChanged", new Class[]{Object.class}));
+        this.pathPopupButton.setTarget(this.id());
+        this.pathPopupButton.setAction(Foundation.selector("pathPopupSelectionChanged:"));
     }
 
     private void addPathToNavigation(final Path p) {
-        pathPopupButton.addItem(p.getAbsolute());
-        pathPopupButton.lastItem().setRepresentedObject(p);
+        pathPopupButton.addItemWithTitle(p.getAbsolute());
+        pathPopupButton.lastItem().setRepresentedObject(p.getAbsolute());
         pathPopupButton.lastItem().setImage(CDIconCache.instance().iconForPath(p, 16));
     }
 
@@ -2208,20 +1667,21 @@ public class CDBrowserController extends CDWindowController
         }
         else {
             pathPopupButton.removeAllItems();
+            final Path workdir = this.workdir();
             this.addPathToNavigation(workdir);
             Path p = workdir;
             while(!p.getParent().equals(p)) {
                 this.addPathToNavigation(p);
-                p = (Path) p.getParent();
+                p = p.getParent();
             }
             this.addPathToNavigation(p);
         }
 
-        this.navigationButton.setEnabled(this.isMounted() && this.getBackHistory().size() > 1,
+        this.navigationButton.setEnabled_forSegment(this.isMounted() && this.getBackHistory().size() > 1,
                 NAVIGATION_LEFT_SEGMENT_BUTTON);
-        this.navigationButton.setEnabled(this.isMounted() && this.getForwardHistory().size() > 0,
+        this.navigationButton.setEnabled_forSegment(this.isMounted() && this.getForwardHistory().size() > 0,
                 NAVIGATION_RIGHT_SEGMENT_BUTTON);
-        this.upButton.setEnabled(this.isMounted() && !this.workdir().isRoot(),
+        this.upButton.setEnabled_forSegment(this.isMounted() && !this.workdir().isRoot(),
                 NAVIGATION_UP_SEGMENT_BUTTON);
 
         this.pathPopupButton.setEnabled(this.isMounted());
@@ -2232,34 +1692,41 @@ public class CDBrowserController extends CDWindowController
         }
     }
 
-    public void pathPopupSelectionChanged(final Object sender) {
-        final Path selected = (Path) pathPopupButton.itemAtIndex(
+    @Action
+    public void pathPopupSelectionChanged(final ID sender) {
+        final String selected = pathPopupButton.itemAtIndex(
                 pathPopupButton.indexOfSelectedItem()).representedObject();
         final Path previous = this.workdir();
         if(selected != null) {
-            this.setWorkdir(selected);
-            if(previous.getParent().equals(selected)) {
-                this.setSelectedPath(previous);
+            final Path path = PathFactory.createPath(session, selected, Path.DIRECTORY_TYPE);
+            this.setWorkdir(path);
+            if(previous.getParent().equals(path)) {
+                this.setWorkdir(path, previous);
+            }
+            else {
+                this.setWorkdir(path);
             }
         }
     }
 
+    @Outlet
     private NSPopUpButton encodingPopup;
 
     public void setEncodingPopup(NSPopUpButton encodingPopup) {
         this.encodingPopup = encodingPopup;
-        this.encodingPopup.setTarget(this);
-        this.encodingPopup.setAction(new NSSelector("encodingButtonClicked", new Class[]{Object.class}));
+        this.encodingPopup.setTarget(this.id());
+        this.encodingPopup.setAction(Foundation.selector("encodingButtonClicked:"));
         this.encodingPopup.removeAllItems();
-        this.encodingPopup.addItemsWithTitles(new NSArray(
-                ((CDMainController) NSApplication.sharedApplication().delegate()).availableCharsets()));
+        this.encodingPopup.addItemsWithTitles(NSArray.arrayWithObjects(CDMainController.availableCharsets()));
         this.encodingPopup.selectItemWithTitle(Preferences.instance().getProperty("browser.charset.encoding"));
     }
 
+    @Action
     public void encodingButtonClicked(final NSPopUpButton sender) {
         this.encodingChanged(sender.titleOfSelectedItem());
     }
 
+    @Action
     public void encodingMenuClicked(final NSMenuItem sender) {
         this.encodingChanged(sender.title());
     }
@@ -2278,13 +1745,15 @@ public class CDBrowserController extends CDWindowController
                     unmountImpl();
                 }
 
+                @Override
                 public void cleanup() {
                     session.getHost().setEncoding(encoding);
                     reloadButtonClicked(null);
                 }
 
+                @Override
                 public String getActivity() {
-                    return MessageFormat.format(NSBundle.localizedString("Disconnecting {0}", "Status", ""),
+                    return MessageFormat.format(Locale.localizedString("Disconnecting {0}", "Status"),
                             session.getHost().getHostname());
                 }
             });
@@ -2302,15 +1771,17 @@ public class CDBrowserController extends CDWindowController
     // Drawers
     // ----------------------------------------------------------
 
-    public void toggleLogDrawer(final Object sender) {
-        this.logDrawer.toggle(this);
+    @Action
+    public void toggleLogDrawer(final ID sender) {
+        this.logDrawer.toggle(this.id());
     }
 
     // ----------------------------------------------------------
     // Status
     // ----------------------------------------------------------
 
-    protected NSProgressIndicator spinner; // IBOutlet
+    @Outlet
+    protected NSProgressIndicator spinner;
 
     public void setSpinner(NSProgressIndicator spinner) {
         this.spinner = spinner;
@@ -2318,43 +1789,57 @@ public class CDBrowserController extends CDWindowController
         this.spinner.setIndeterminate(true);
     }
 
-    private NSTextField statusLabel; // IBOutlet
+    public NSProgressIndicator getSpinner() {
+        return spinner;
+    }
+
+    @Outlet
+    private NSTextField statusLabel;
 
     public void setStatusLabel(NSTextField statusLabel) {
         this.statusLabel = statusLabel;
     }
 
-    public void updateStatusLabel(String label) {
-        if(StringUtils.isEmpty(label)) {
-            label = NSBundle.localizedString("Disconnected", "Status", "");
+    public void updateStatusLabel() {
+        String label = Locale.localizedString("Disconnected", "Status");
+        if(this.getSelectedTabView() == TAB_BOOKMARKS) {
+            label = this.bookmarkTable.numberOfRows() + " " + Locale.localizedString("Bookmarks");
+        }
+        else {
             if(this.isMounted()) {
                 if(this.isConnected()) {
-                    label = this.getSelectedBrowserView().numberOfRows() + " " + NSBundle.localizedString("Files", "");
+                    label = this.getSelectedBrowserView().numberOfRows() + " " + Locale.localizedString("Files");
                 }
             }
         }
-        // Update the status label at the bottom of the browser window
-        statusLabel.setAttributedStringValue(new NSAttributedString(label, TRUNCATE_MIDDLE_ATTRIBUTES));
+        this.updateStatusLabel(label);
     }
 
-    private NSButton securityLabel; // IBOutlet
+    public void updateStatusLabel(String label) {
+        // Update the status label at the bottom of the browser window
+        statusLabel.setAttributedStringValue(NSAttributedString.attributedStringWithAttributes(label, TRUNCATE_MIDDLE_ATTRIBUTES));
+    }
+
+    @Outlet
+    private NSButton securityLabel;
 
     public void setSecurityLabel(NSButton securityLabel) {
         this.securityLabel = securityLabel;
-        this.securityLabel.setImage(NSImage.imageNamed("unlocked.tiff"));
+        this.securityLabel.setImage(CDIconCache.iconNamed("unlocked.tiff"));
         this.securityLabel.setEnabled(false);
-        this.securityLabel.setTarget(this);
-        this.securityLabel.setAction(new NSSelector("securityLabelClicked", new Class[]{Object.class}));
+        this.securityLabel.setTarget(this.id());
+        this.securityLabel.setAction(Foundation.selector("securityLabelClicked:"));
     }
 
-    public void securityLabelClicked(final Object sender) {
+    @Action
+    public void securityLabelClicked(final ID sender) {
         if(session instanceof SSLSession) {
             final X509Certificate[] certificates = ((SSLSession) this.session).getTrustManager().getAcceptedIssuers();
             if(0 == certificates.length) {
                 log.warn("No accepted certificates found");
                 return;
             }
-            Keychain.instance().displayCertificates(certificates);
+            KeychainFactory.instance().displayCertificates(certificates);
         }
     }
 
@@ -2362,13 +1847,12 @@ public class CDBrowserController extends CDWindowController
     // Selector methods for the toolbar items
     // ----------------------------------------------------------
 
-    public void quicklookButtonClicked(final Object sender) {
-        if(QuickLook.isOpen()) {
-            QuickLook.close();
+    public void quicklookButtonClicked(final ID sender) {
+        if(QuickLookFactory.instance().isOpen()) {
+            QuickLookFactory.instance().close();
         }
         else {
-            final AbstractBrowserTableDelegate delegate
-                    = (AbstractBrowserTableDelegate) this.getSelectedBrowserView().delegate();
+            final AbstractBrowserTableDelegate delegate = this.getSelectedBrowserDelegate();
             delegate.updateQuickLookSelection(this.getSelectedPaths());
         }
     }
@@ -2379,8 +1863,10 @@ public class CDBrowserController extends CDWindowController
      *
      * @param sender
      */
-    public void reloadButtonClicked(final Object sender) {
+    @Action
+    public void reloadButtonClicked(final ID sender) {
         if(this.isMounted()) {
+            final Collection<Path> selected = this.getSelectedPaths();
             switch(this.browserSwitchView.selectedSegment()) {
                 case SWITCH_LIST_VIEW: {
                     this.workdir().invalidate();
@@ -2388,19 +1874,17 @@ public class CDBrowserController extends CDWindowController
                 }
                 case SWITCH_OUTLINE_VIEW: {
                     this.workdir().invalidate();
-                    for(int i = 0; i < this.browserOutlineView.numberOfRows(); i++) {
-                        Path p = (Path) this.browserOutlineView.itemAtRow(i);
-                        if(null == p) {
-                            break;
+                    for(int i = 0; i < browserOutlineView.numberOfRows().intValue(); i++) {
+                        final Path item = this.lookup(new OutlinePathReference(browserOutlineView.itemAtRow(new NSInteger(i))));
+                        if(null == item) {
+                            continue;
                         }
-                        if(p.attributes.isDirectory()) {
-                            p.invalidate();
-                        }
+                        item.invalidate();
                     }
                     break;
                 }
             }
-            this.reloadData(true);
+            this.reloadData(selected);
         }
     }
 
@@ -2409,7 +1893,8 @@ public class CDBrowserController extends CDWindowController
      *
      * @param sender
      */
-    public void newBrowserButtonClicked(final Object sender) {
+    @Action
+    public void newBrowserButtonClicked(final ID sender) {
         Path selected = this.getSelectedPath();
         if(null == selected || !selected.attributes.isDirectory()) {
             selected = this.workdir();
@@ -2417,7 +1902,7 @@ public class CDBrowserController extends CDWindowController
         CDBrowserController c = new CDBrowserController();
         c.cascade();
         c.window().makeKeyAndOrderFront(null);
-        final Host host = new Host(this.getSession().getHost().getAsDictionary());
+        final Host host = new Host(this.getSession().getHost().<NSDictionary>getAsDictionary());
         host.setDefaultPath(selected.getAbsolute());
         c.mount(host);
     }
@@ -2457,12 +1942,11 @@ public class CDBrowserController extends CDWindowController
                 }
             }
 
+            @Override
             public void cleanup() {
-                for(Iterator<Path> iter = normalized.values().iterator(); iter.hasNext();) {
-                    Path duplicate = iter.next();
+                for(Path duplicate : normalized.values()) {
                     if(edit) {
-                        Editor editor = EditorFactory.createEditor(CDBrowserController.this, duplicate.getLocal(),
-                                duplicate);
+                        Editor editor = EditorFactory.createEditor(CDBrowserController.this, duplicate);
                         editor.open();
                     }
                     if(duplicate.getName().charAt(0) == '.') {
@@ -2470,6 +1954,12 @@ public class CDBrowserController extends CDWindowController
                     }
                 }
                 reloadData(new ArrayList<Path>(normalized.values()));
+            }
+
+            @Override
+            public String getActivity() {
+                return MessageFormat.format(Locale.localizedString("Copying {0} to {1}", "Status"),
+                        normalized.keySet().iterator().next().getName(), normalized.values().iterator().next().getName());
             }
         });
     }
@@ -2508,8 +1998,15 @@ public class CDBrowserController extends CDWindowController
                 }
             }
 
+            @Override
             public void cleanup() {
                 reloadData(new ArrayList<Path>(normalized.values()));
+            }
+
+            @Override
+            public String getActivity() {
+                return MessageFormat.format(Locale.localizedString("Renaming {0} to {1}", "Status"),
+                        normalized.keySet().iterator().next().getName(), normalized.values().iterator().next().getName());
             }
         });
     }
@@ -2522,37 +2019,36 @@ public class CDBrowserController extends CDWindowController
     private void checkOverwrite(final java.util.Collection<Path> selected, final BackgroundAction action) {
         if(selected.size() > 0) {
             StringBuffer alertText = new StringBuffer(
-                    NSBundle.localizedString("A file with the same name already exists. Do you want to replace the existing file?", ""));
+                    Locale.localizedString("A file with the same name already exists. Do you want to replace the existing file?"));
             int i = 0;
             Iterator<Path> iter = null;
-            boolean alert = false;
+            boolean shouldWarn = false;
             for(iter = selected.iterator(); i < 10 && iter.hasNext();) {
                 Path item = iter.next();
                 if(item.exists()) {
-                    alertText.append("\n" + Character.toString('\u2022') + " " + item.getName());
-                    alert = true;
+                    alertText.append("\n").append(Character.toString('\u2022')).append(" ").append(item.getName());
+                    shouldWarn = true;
                 }
                 i++;
             }
             if(iter.hasNext()) {
                 alertText.append("\n" + Character.toString('\u2022') + " ...)");
             }
-            if(alert) {
-                NSWindow sheet = NSAlertPanel.criticalAlertPanel(
-                        NSBundle.localizedString("Overwrite", "Alert sheet title"), //title
+            if(shouldWarn) {
+                NSAlert alert = NSAlert.alert(
+                        Locale.localizedString("Overwrite"), //title
                         alertText.toString(),
-                        NSBundle.localizedString("Overwrite", "Alert sheet default button"), // defaultbutton
-                        NSBundle.localizedString("Cancel", "Alert sheet alternate button"), //alternative button
+                        Locale.localizedString("Overwrite"), // defaultbutton
+                        Locale.localizedString("Cancel"), //alternative button
                         null //other button
                 );
-                CDSheetController c = new CDSheetController(this, sheet) {
+                this.alert(alert, new CDSheetCallback() {
                     public void callback(final int returncode) {
                         if(returncode == DEFAULT_OPTION) {
                             CDBrowserController.this.background(action);
                         }
                     }
-                };
-                c.beginSheet();
+                });
             }
             else {
                 this.background(action);
@@ -2569,7 +2065,7 @@ public class CDBrowserController extends CDWindowController
         if(selected.size() > 0) {
             if(Preferences.instance().getBoolean("browser.confirmMove")) {
                 StringBuffer alertText = new StringBuffer(
-                        NSBundle.localizedString("Do you want to move the selected files?", ""));
+                        Locale.localizedString("Do you want to move the selected files?"));
                 int i = 0;
                 Iterator<Path> iter = null;
                 for(iter = selected.iterator(); i < 10 && iter.hasNext();) {
@@ -2580,21 +2076,20 @@ public class CDBrowserController extends CDWindowController
                 if(iter.hasNext()) {
                     alertText.append("\n" + Character.toString('\u2022') + " ...)");
                 }
-                NSWindow sheet = NSAlertPanel.criticalAlertPanel(
-                        NSBundle.localizedString("Move", "Alert sheet title"), //title
+                final NSAlert alert = NSAlert.alert(
+                        Locale.localizedString("Move"), //title
                         alertText.toString(),
-                        NSBundle.localizedString("Move", "Alert sheet default button"), // defaultbutton
-                        NSBundle.localizedString("Cancel", "Alert sheet alternate button"), //alternative button
+                        Locale.localizedString("Move"), // defaultbutton
+                        Locale.localizedString("Cancel"), //alternative button
                         null //other button
                 );
-                CDSheetController c = new CDSheetController(this, sheet) {
+                this.alert(alert, new CDSheetCallback() {
                     public void callback(final int returncode) {
                         if(returncode == DEFAULT_OPTION) {
                             checkOverwrite(selected, action);
                         }
                     }
-                };
-                c.beginSheet();
+                });
             }
             else {
                 this.checkOverwrite(selected, action);
@@ -2606,7 +2101,7 @@ public class CDBrowserController extends CDWindowController
      * Prunes the map of selected files. Files which are a child of an already included directory
      * are removed from the returned map.
      */
-    private Map<Path, Path> checkHierarchy(final Map<Path, Path> selected) {
+    protected Map<Path, Path> checkHierarchy(final Map<Path, Path> selected) {
         final Map<Path, Path> normalized = new HashMap<Path, Path>();
         Iterator<Path> sourcesIter = selected.keySet().iterator();
         Iterator<Path> destinationsIter = selected.values().iterator();
@@ -2623,7 +2118,7 @@ public class CDBrowserController extends CDWindowController
                     break;
                 }
                 if(n.isChild(f)) {
-                    // Remove the previously added file as it is a child 
+                    // Remove the previously added file as it is a child
                     // of the currently evaluated file
                     normalizedIter.remove();
                 }
@@ -2641,11 +2136,9 @@ public class CDBrowserController extends CDWindowController
      */
     protected List<Path> checkHierarchy(final List<Path> selected) {
         final List<Path> normalized = new Collection<Path>();
-        for(Iterator<Path> iter = selected.iterator(); iter.hasNext();) {
-            Path f = iter.next();
+        for(Path f : selected) {
             boolean duplicate = false;
-            for(Iterator<Path> normalizedIter = normalized.iterator(); normalizedIter.hasNext();) {
-                Path n = normalizedIter.next();
+            for(Path n : normalized) {
                 if(f.isChild(n)) {
                     // The selected file is a child of a directory
                     // already included for deletion
@@ -2676,55 +2169,56 @@ public class CDBrowserController extends CDWindowController
      */
     public void deletePaths(final List<Path> selected) {
         final List<Path> normalized = this.checkHierarchy(selected);
-        if(normalized.size() > 0) {
-            StringBuffer alertText =
-                    new StringBuffer(NSBundle.localizedString("Really delete the following files? This cannot be undone.", "Confirm deleting files."));
-            int i = 0;
-            Iterator<Path> iter = null;
-            for(iter = normalized.iterator(); i < 10 && iter.hasNext();) {
-                alertText.append("\n" + Character.toString('\u2022') + " " + iter.next().getName());
-                i++;
-            }
-            if(iter.hasNext()) {
-                alertText.append("\n" + Character.toString('\u2022') + " " + "(...)");
-            }
-            NSWindow sheet = NSAlertPanel.criticalAlertPanel(NSBundle.localizedString("Delete", "Alert sheet title"), //title
-                    alertText.toString(),
-                    NSBundle.localizedString("Delete", "Alert sheet default button"), // defaultbutton
-                    NSBundle.localizedString("Cancel", "Alert sheet alternate button"), //alternative button
-                    null //other button
-            );
-            CDSheetController c = new CDSheetController(this, sheet) {
-                public void callback(final int returncode) {
-                    if(returncode == DEFAULT_OPTION) {
-                        CDBrowserController.this.deletePathsImpl(normalized);
-                    }
-                }
-            };
-            c.beginSheet();
+        if(normalized.isEmpty()) {
+            return;
         }
+        StringBuffer alertText =
+                new StringBuffer(Locale.localizedString("Really delete the following files? This cannot be undone."));
+        int i = 0;
+        Iterator<Path> iter = null;
+        for(iter = normalized.iterator(); i < 10 && iter.hasNext();) {
+            alertText.append("\n").append(Character.toString('\u2022')).append(" ").append(iter.next().getName());
+            i++;
+        }
+        if(iter.hasNext()) {
+            alertText.append("\n").append(Character.toString('\u2022')).append(" " + "(...)");
+        }
+        NSAlert alert = NSAlert.alert(Locale.localizedString("Delete"), //title
+                alertText.toString(),
+                Locale.localizedString("Delete"), // defaultbutton
+                Locale.localizedString("Cancel"), //alternative button
+                null //other button
+        );
+        this.alert(alert, new CDSheetCallback() {
+            public void callback(final int returncode) {
+                if(returncode == DEFAULT_OPTION) {
+                    CDBrowserController.this.deletePathsImpl(normalized);
+                }
+            }
+        });
     }
 
     private void deletePathsImpl(final List<Path> files) {
         this.background(new BrowserBackgroundAction(this) {
             public void run() {
-                for(Iterator<Path> iter = files.iterator(); iter.hasNext();) {
+                for(Path file : files) {
                     if(this.isCanceled()) {
                         break;
                     }
-                    Path f = iter.next();
-                    f.delete();
-                    f.getParent().invalidate();
+                    file.delete();
+                    file.getParent().invalidate();
                     if(!isConnected()) {
                         break;
                     }
                 }
             }
 
+            @Override
             public String getActivity() {
-                return MessageFormat.format(NSBundle.localizedString("Deleting {0}", "Status", ""), "");
+                return MessageFormat.format(Locale.localizedString("Deleting {0}", "Status"), "");
             }
 
+            @Override
             public void cleanup() {
                 reloadData(false);
             }
@@ -2737,69 +2231,74 @@ public class CDBrowserController extends CDWindowController
      */
     private boolean isEditable(final Path selected) {
         if(selected.attributes.isFile()) {
+            if(Preferences.instance().getBoolean("editor.kqueue.enable")) {
+                return true;
+            }
             return !selected.getBinaryFiletypePattern().matcher(selected.getName()).matches();
         }
         return false;
     }
 
-    public void gotoButtonClicked(final Object sender) {
-        CDSheetController controller = new CDGotoController(this);
-        controller.beginSheet();
+    @Action
+    public void gotoButtonClicked(final ID sender) {
+        CDSheetController sheet = new CDGotoController(this);
+        sheet.beginSheet();
     }
 
-    public void createFileButtonClicked(final Object sender) {
-        CDSheetController controller = new CDCreateFileController(this);
-        controller.beginSheet();
+    @Action
+    public void createFileButtonClicked(final ID sender) {
+        CDSheetController sheet = new CDCreateFileController(this);
+        sheet.beginSheet();
     }
 
-    public void duplicateFileButtonClicked(final Object sender) {
-        CDSheetController controller = new CDDuplicateFileController(this);
-        controller.beginSheet();
+    @Action
+    public void duplicateFileButtonClicked(final ID sender) {
+        CDSheetController sheet = new CDDuplicateFileController(this);
+        sheet.beginSheet();
     }
 
-    public void createFolderButtonClicked(final Object sender) {
-        CDSheetController controller = new CDFolderController(this);
-        controller.beginSheet();
+    @Action
+    public void createFolderButtonClicked(final ID sender) {
+        CDSheetController sheet = new CDFolderController(this);
+        sheet.beginSheet();
     }
 
-    public void renameFileButtonClicked(final Object sender) {
+    @Action
+    public void renameFileButtonClicked(final ID sender) {
         final NSTableView browser = this.getSelectedBrowserView();
-        browser.editLocation(
+        browser.editRow(
                 browser.columnWithIdentifier(CDBrowserTableDataSource.FILENAME_COLUMN),
-                browser.selectedRow(), null, true);
-        //editColumn:mBrowserEditingColumn row:mBrowserEditingRow withEvent:nil select:YES
+                browser.selectedRow(), true);
     }
 
-    public void sendCustomCommandClicked(final Object sender) {
-        CDSheetController controller = new CDCommandController(this, this.session);
-        controller.beginSheet();
+    @Action
+    public void sendCustomCommandClicked(final ID sender) {
+        CDSheetController sheet = new CDCommandController(this, this.session);
+        sheet.beginSheet();
     }
 
+    @Action
     public void editMenuClicked(final NSMenuItem sender) {
         for(Path selected : this.getSelectedPaths()) {
-            String identifier = EditorFactory.SUPPORTED_ODB_EDITORS.get(sender.title());
+            String identifier = EditorFactory.getSupportedOdbEditors().get(sender.title());
             if(identifier != null) {
-                Editor editor = EditorFactory.createEditor(
-                        this, identifier.toString(), selected);
+                Editor editor = EditorFactory.createEditor(this, identifier, selected);
                 editor.open();
             }
         }
     }
 
-    public void editButtonClicked(final Object sender) {
+    @Action
+    public void editButtonClicked(final ID sender) {
         for(Path selected : this.getSelectedPaths()) {
-            Editor editor = EditorFactory.createEditor(this, selected.getLocal(), selected);
+            Editor editor = EditorFactory.createEditor(this, selected);
             editor.open();
         }
     }
 
-    public void openBrowserButtonClicked(final Object sender) {
-        try {
-            NSWorkspace.sharedWorkspace().openURL(new URL(this.getSelectedPathWebUrl()));
-        }
-        catch(MalformedURLException e) {
-            log.error("Cannot open in web browser:" + e.getMessage());
-        }
+    @Action
+    public void openBrowserButtonClicked(final ID sender) {
+        NSWorkspace.sharedWorkspace().openURL(NSURL.URLWithString(this.getSelectedPathWebUrl()));
     }
 
     protected String getSelectedPathWebUrl() {
@@ -2813,9 +2312,10 @@ public class CDBrowserController extends CDWindowController
         return selected.toHttpURL();
     }
 
-    private CDInfoController inspector = null;
+    private CDInfoController inspector;
 
-    public void infoButtonClicked(final Object sender) {
+    @Action
+    public void infoButtonClicked(final ID sender) {
         if(this.getSelectionCount() > 0) {
             final List<Path> selected = this.getSelectedPaths();
             if(Preferences.instance().getBoolean("browser.info.isInspector")) {
@@ -2834,7 +2334,8 @@ public class CDBrowserController extends CDWindowController
         }
     }
 
-    public void deleteFileButtonClicked(final Object sender) {
+    @Action
+    public void deleteFileButtonClicked(final ID sender) {
         this.deletePaths(this.getSelectedPaths());
     }
 
@@ -2842,37 +2343,33 @@ public class CDBrowserController extends CDWindowController
 
     private NSOpenPanel downloadToPanel;
 
-    public void downloadToButtonClicked(final Object sender) {
+    @Action
+    public void downloadToButtonClicked(final ID sender) {
         downloadToPanel = NSOpenPanel.openPanel();
         downloadToPanel.setCanChooseDirectories(true);
         downloadToPanel.setCanCreateDirectories(true);
         downloadToPanel.setCanChooseFiles(false);
         downloadToPanel.setAllowsMultipleSelection(false);
-        downloadToPanel.setPrompt(NSBundle.localizedString("Download To", ""));
-        downloadToPanel.setTitle(NSBundle.localizedString("Download To", ""));
+        downloadToPanel.setPrompt(Locale.localizedString("Choose"));
         downloadToPanel.beginSheetForDirectory(
                 lastSelectedDownloadDirectory, //trying to be smart
-                null,
-                null,
-                this.window,
-                this,
-                new NSSelector("downloadToPanelDidEnd", new Class[]{NSOpenPanel.class, int.class, Object.class}),
+                null, this.window, this.id(),
+                Foundation.selector("downloadToPanelDidEnd:returnCode:contextInfo:"),
                 null);
     }
 
-
-    public void downloadToPanelDidEnd(NSOpenPanel sheet, int returncode, final Object contextInfo) {
+    public void downloadToPanelDidEnd_returnCode_contextInfo(NSOpenPanel sheet, int returncode, final ID contextInfo) {
         sheet.close();
         if(returncode == CDSheetCallback.DEFAULT_OPTION) {
-            final Session session = this.getTransferSession();
+            final Session session = getTransferSession();
             final List<Path> roots = new Collection<Path>();
-            for(Path selected : this.getSelectedPaths()) {
+            for(Path selected : getSelectedPaths()) {
                 Path path = PathFactory.createPath(session, selected.getAsDictionary());
-                path.setLocal(new Local(sheet.filename(), path.getLocal().getName()));
+                path.setLocal(LocalFactory.createLocal(sheet.filename(), path.getLocal().getName()));
                 roots.add(path);
             }
             final Transfer q = new DownloadTransfer(roots);
-            this.transfer(q);
+            transfer(q);
         }
         lastSelectedDownloadDirectory = sheet.filename();
         downloadToPanel = null;
@@ -2880,42 +2377,35 @@ public class CDBrowserController extends CDWindowController
 
     private NSSavePanel downloadAsPanel;
 
-    public void downloadAsButtonClicked(final Object sender) {
-        final Session session = this.getTransferSession();
-        for(Path selected : this.getSelectedPaths()) {
-            Path path = PathFactory.createPath(session, selected.getAsDictionary());
-            downloadAsPanel = NSSavePanel.savePanel();
-            downloadAsPanel.setMessage(NSBundle.localizedString("Download the selected file to...", ""));
-            downloadAsPanel.setNameFieldLabel(NSBundle.localizedString("Download As:", ""));
-            downloadAsPanel.setPrompt(NSBundle.localizedString("Download", ""));
-            downloadAsPanel.setTitle(NSBundle.localizedString("Download", ""));
-            downloadAsPanel.setCanCreateDirectories(true);
-            downloadAsPanel.beginSheetForDirectory(null,
-                    path.getLocal().getName(),
-                    this.window,
-                    this,
-                    new NSSelector("downloadAsPanelDidEnd", new Class[]{NSOpenPanel.class, int.class, Object.class}),
-                    path);
-        }
+    @Action
+    public void downloadAsButtonClicked(final ID sender) {
+        downloadAsPanel = NSSavePanel.savePanel();
+        downloadAsPanel.setMessage(Locale.localizedString("Download the selected file to..."));
+        downloadAsPanel.setNameFieldLabel(Locale.localizedString("Download As:"));
+        downloadAsPanel.setPrompt(Locale.localizedString("Download"));
+        downloadAsPanel.setCanCreateDirectories(true);
+        downloadAsPanel.beginSheetForDirectory(null, this.getSelectedPath().getLocal().getName(), this.window, this.id(),
+                Foundation.selector("downloadAsPanelDidEnd:returnCode:contextInfo:"),
+                null);
     }
 
-    public void downloadAsPanelDidEnd(NSSavePanel sheet, int returncode, final Path contextInfo) {
+    public void downloadAsPanelDidEnd_returnCode_contextInfo(NSSavePanel sheet, int returncode, final ID contextInfo) {
         sheet.close();
         if(returncode == CDSheetCallback.DEFAULT_OPTION) {
             String filename;
             if((filename = sheet.filename()) != null) {
-                Path path = contextInfo;
-                path.setLocal(new Local(filename));
-                final Transfer q = new DownloadTransfer(path);
-                this.transfer(q);
+                final Path selection = PathFactory.createPath(getTransferSession(), this.getSelectedPath().getAsDictionary());
+                selection.setLocal(LocalFactory.createLocal(filename));
+                final Transfer q = new DownloadTransfer(selection);
+                transfer(q);
             }
         }
-        downloadAsPanel = null;
     }
 
     private NSOpenPanel syncPanel;
 
-    public void syncButtonClicked(final Object sender) {
+    @Action
+    public void syncButtonClicked(final ID sender) {
         final Path selection;
         if(this.getSelectionCount() == 1 &&
                 this.getSelectedPath().attributes.isDirectory()) {
@@ -2929,35 +2419,36 @@ public class CDBrowserController extends CDWindowController
         syncPanel.setCanChooseFiles(selection.attributes.isFile());
         syncPanel.setCanCreateDirectories(true);
         syncPanel.setAllowsMultipleSelection(false);
-        syncPanel.setMessage(NSBundle.localizedString("Synchronize", "")
+        syncPanel.setMessage(Locale.localizedString("Synchronize")
                 + " " + selection.getName() + " "
-                + NSBundle.localizedString("with", "Synchronize <file> with <file>"));
-        syncPanel.setPrompt(NSBundle.localizedString("Choose", ""));
-        syncPanel.setTitle(NSBundle.localizedString("Synchronize", ""));
-        syncPanel.beginSheetForDirectory(null,
-                null,
-                null,
-                this.window, //parent window
-                this,
-                new NSSelector("syncPanelDidEnd", new Class[]{NSOpenPanel.class, int.class, Object.class}),
-                selection //context info
+                + Locale.localizedString("with"));
+        syncPanel.setPrompt(Locale.localizedString("Choose"));
+        syncPanel.beginSheetForDirectory(null, null, this.window, this.id(),
+                Foundation.selector("syncPanelDidEnd:returnCode:contextInfo:"), null //context info
         );
     }
 
-    public void syncPanelDidEnd(NSOpenPanel sheet, int returncode, final Path selection) {
+    public void syncPanelDidEnd_returnCode_contextInfo(NSOpenPanel sheet, int returncode, final ID contextInfo) {
         sheet.close();
         if(returncode == CDSheetCallback.DEFAULT_OPTION) {
-            if(sheet.filenames().count() > 0) {
-                Path root = PathFactory.createPath(this.getTransferSession(), selection.getAsDictionary());
-                root.setLocal(new Local(sheet.filenames().lastObject().toString()));
-                final Transfer q = new SyncTransfer(root);
-                this.transfer(q, selection);
+            if(sheet.filenames().count().intValue() > 0) {
+                final Path selection;
+                if(this.getSelectionCount() == 1 &&
+                        this.getSelectedPath().attributes.isDirectory()) {
+                    selection = PathFactory.createPath(getTransferSession(), this.getSelectedPath().getAsDictionary());
+                }
+                else {
+                    selection = PathFactory.createPath(getTransferSession(), this.workdir().getAsDictionary());
+                }
+                selection.setLocal(LocalFactory.createLocal(sheet.filenames().lastObject().toString()));
+                final Transfer q = new SyncTransfer(selection);
+                transfer(q, selection);
             }
         }
-        syncPanel = null;
     }
 
-    public void downloadButtonClicked(final Object sender) {
+    @Action
+    public void downloadButtonClicked(final ID sender) {
         final Session session = this.getTransferSession();
         final List<Path> roots = new Collection<Path>();
         for(Path selected : this.getSelectedPaths()) {
@@ -2973,61 +2464,63 @@ public class CDBrowserController extends CDWindowController
 
     private NSOpenPanel uploadPanel;
 
-    public void uploadButtonClicked(final Object sender) {
+    @Action
+    public void uploadButtonClicked(final ID sender) {
         uploadPanel = NSOpenPanel.openPanel();
         uploadPanel.setCanChooseDirectories(true);
         uploadPanel.setCanCreateDirectories(false);
         uploadPanel.setCanChooseFiles(true);
         uploadPanel.setAllowsMultipleSelection(true);
-        uploadPanel.setPrompt(NSBundle.localizedString("Upload", ""));
-        uploadPanel.setTitle(NSBundle.localizedString("Upload", ""));
-        uploadPanel.beginSheetForDirectory(
-                lastSelectedUploadDirectory, //trying to be smart
-                null,
-                null,
-                this.window,
-                this,
-                new NSSelector("uploadPanelDidEnd", new Class[]{NSOpenPanel.class, int.class, Object.class}),
+        uploadPanel.setPrompt(Locale.localizedString("Upload"));
+        uploadPanel.beginSheetForDirectory(lastSelectedUploadDirectory, //trying to be smart
+                null, this.window,
+                this.id(),
+                Foundation.selector("uploadPanelDidEnd:returnCode:contextInfo:"),
                 null);
     }
 
-    public void uploadPanelDidEnd(NSOpenPanel sheet, int returncode, Object contextInfo) {
+    public void uploadPanelDidEnd_returnCode_contextInfo(NSOpenPanel sheet, int returncode, ID contextInfo) {
         sheet.close();
         if(returncode == CDSheetCallback.DEFAULT_OPTION) {
-            Path destination = this.getSelectedPath();
+            Path destination = getSelectedPath();
             if(null == destination) {
-                destination = this.workdir();
+                destination = workdir();
             }
             else if(!destination.attributes.isDirectory()) {
-                destination = (Path) destination.getParent();
+                destination = destination.getParent();
             }
             // selected files on the local filesystem
             NSArray selected = sheet.filenames();
-            java.util.Enumeration iterator = selected.objectEnumerator();
-            final Session session = this.getTransferSession();
+            NSEnumerator iterator = selected.objectEnumerator();
+            final Session session = getTransferSession();
             final List<Path> roots = new Collection<Path>();
-            while(iterator.hasMoreElements()) {
+            NSObject next;
+            while((next = iterator.nextObject()) != null) {
                 roots.add(PathFactory.createPath(session,
                         destination.getAbsolute(),
-                        new Local((String) iterator.nextElement())));
+                        LocalFactory.createLocal(next.toString())));
             }
             final Transfer q = new UploadTransfer(roots);
-            this.transfer(q, destination);
+            transfer(q, destination);
         }
         lastSelectedUploadDirectory = new File(sheet.filename()).getParent();
         uploadPanel = null;
     }
 
     /**
-     * @return The session to be used for file transfers
+     * @return The session to be used for file transfers. Null if not mounted
      */
     protected Session getTransferSession() {
+        if(!this.isMounted()) {
+            return null;
+        }
         if(this.session.getMaxConnections() == 1) {
             return this.session;
         }
-        final Host h = new Host(this.session.getHost().getAsDictionary());
+        final Host h = new Host(this.session.getHost().<NSDictionary>getAsDictionary());
         // Copy credentials of the browser
         h.getCredentials().setPassword(this.session.getHost().getCredentials().getPassword());
+        h.getCredentials().setUseKeychain(false);
         return SessionFactory.createSession(h);
     }
 
@@ -3040,15 +2533,17 @@ public class CDBrowserController extends CDWindowController
     protected void transfer(final Transfer transfer, final Path workdir) {
         final TransferListener l;
         transfer.addListener(l = new TransferAdapter() {
+            @Override
             public void transferDidEnd() {
                 if(isMounted()) {
                     workdir.invalidate();
                     if(!transfer.isCanceled()) {
-                        CDMainApplication.invoke(new WindowMainAction(CDBrowserController.this) {
+                        invoke(new WindowMainAction(CDBrowserController.this) {
                             public void run() {
                                 reloadData(true);
                             }
 
+                            @Override
                             public boolean isValid() {
                                 return super.isValid() && CDBrowserController.this.isConnected();
                             }
@@ -3086,35 +2581,36 @@ public class CDBrowserController extends CDWindowController
 
     protected void transfer(final Transfer transfer, final boolean useBrowserConnection, final TransferPrompt prompt) {
         if(useBrowserConnection) {
-            final Speedometer meter = new Speedometer(transfer);
             final TransferListener l;
-            final long delay = 0;
-            final long period = 500; //in milliseconds
             transfer.addListener(l = new TransferAdapter() {
+                private Speedometer meter = new Speedometer(transfer);
+
                 /**
                  * Timer to update the progress indicator
                  */
-                private Timer progressTimer;
+                private ScheduledFuture<?> progressTimer;
 
+                @Override
                 public void willTransferPath(Path path) {
                     meter.reset();
-                    progressTimer = new Timer();
-                    progressTimer.scheduleAtFixedRate(new TimerTask() {
+                    progressTimer = getTimerPool().scheduleAtFixedRate(new Runnable() {
                         public void run() {
-                            CDMainApplication.invoke(new WindowMainAction(CDBrowserController.this) {
+                            invoke(new WindowMainAction(CDBrowserController.this) {
                                 public void run() {
                                     CDBrowserController.this.updateStatusLabel(meter.getProgress());
                                 }
                             });
                         }
-                    }, delay, period);
+                    }, 0, 500, TimeUnit.MILLISECONDS);
                 }
 
+                @Override
                 public void didTransferPath(Path path) {
-                    progressTimer.cancel();
+                    progressTimer.cancel(false);
                     meter.reset();
                 }
 
+                @Override
                 public void bandwidthChanged(BandwidthThrottle bandwidth) {
                     meter.reset();
                 }
@@ -3131,15 +2627,18 @@ public class CDBrowserController extends CDWindowController
                     transfer.start(prompt, options);
                 }
 
+                @Override
                 public void cancel() {
                     transfer.cancel();
                     super.cancel();
                 }
 
+                @Override
                 public void cleanup() {
-                    updateStatusLabel(null);
+                    updateStatusLabel();
                 }
 
+                @Override
                 public String getActivity() {
                     return transfer.getName();
                 }
@@ -3150,7 +2649,8 @@ public class CDBrowserController extends CDWindowController
         }
     }
 
-    public void insideButtonClicked(final Object sender) {
+    @Action
+    public void insideButtonClicked(final ID sender) {
         final Path selected = this.getSelectedPath(); //last row selected
         if(null == selected) {
             return;
@@ -3168,7 +2668,8 @@ public class CDBrowserController extends CDWindowController
         }
     }
 
-    public void connectButtonClicked(final Object sender) {
+    @Action
+    public void connectButtonClicked(final ID sender) {
         final CDSheetController controller = CDConnectionController.instance(this);
         this.addListener(new CDWindowListener() {
             public void windowWillClose() {
@@ -3178,18 +2679,19 @@ public class CDBrowserController extends CDWindowController
         controller.beginSheet();
     }
 
-    public void interruptButtonClicked(final Object sender) {
+    @Action
+    public void interruptButtonClicked(final ID sender) {
         // Remove all pending actions
-        BackgroundAction[] l = (BackgroundAction[]) BackgroundActionRegistry.instance().toArray(
-                new BackgroundAction[BackgroundActionRegistry.instance().size()]);
-        for(int i = 0; i < l.length; i++) {
-            l[i].cancel();
+        for(BackgroundAction action : BackgroundActionRegistry.instance().toArray(
+                new BackgroundAction[BackgroundActionRegistry.instance().size()])) {
+            action.cancel();
         }
         // Interrupt any pending operation by forcefully closing the socket
         this.interrupt();
     }
 
-    public void disconnectButtonClicked(final Object sender) {
+    @Action
+    public void disconnectButtonClicked(final ID sender) {
         if(this.isActivityRunning()) {
             this.interruptButtonClicked(sender);
         }
@@ -3198,14 +2700,15 @@ public class CDBrowserController extends CDWindowController
         }
     }
 
+    @Action
     public void showHiddenFilesClicked(final NSMenuItem sender) {
-        if(sender.state() == NSCell.OnState) {
+        if(sender.state() == NSCell.NSOnState) {
             this.setShowHiddenFiles(false);
-            sender.setState(NSCell.OffState);
+            sender.setState(NSCell.NSOffState);
         }
-        else if(sender.state() == NSCell.OffState) {
+        else if(sender.state() == NSCell.NSOffState) {
             this.setShowHiddenFiles(true);
-            sender.setState(NSCell.OnState);
+            sender.setState(NSCell.NSOnState);
         }
         if(this.isMounted()) {
             this.reloadData(true);
@@ -3243,73 +2746,60 @@ public class CDBrowserController extends CDWindowController
         return false;
     }
 
-    public void cut(final Object sender) {
-        final List<Path> roots = new Collection<Path>();
+    public void cut(final ID sender) {
         for(Path selected : this.getSelectedPaths()) {
-            roots.add(selected);
-        }
-        final Transfer q = new DownloadTransfer(roots);
-        // Writing data for private use when the item gets dragged to the transfer queue.
-        final NSPasteboard transferPasteboard = NSPasteboard.pasteboardWithName(CDPasteboards.TransferPasteboard);
-        transferPasteboard.declareTypes(new NSArray(CDPasteboards.TransferPasteboardType), null);
-        if(transferPasteboard.setPropertyListForType(new NSArray(q.getAsDictionary()), CDPasteboards.TransferPasteboardType)) {
-            log.debug("TransferPasteboardType data sucessfully written to pasteboard");
+            // Writing data for private use when the item gets dragged to the transfer queue.
+            PathPasteboard.getPasteboard(this.getSession().getHost()).add(selected.<NSDictionary>getAsDictionary());
         }
         final NSPasteboard generalPasteboard = NSPasteboard.generalPasteboard();
-        generalPasteboard.declareTypes(new NSArray(NSPasteboard.StringPboardType), null);
+        generalPasteboard.declareTypes(NSArray.arrayWithObject(NSString.stringWithString(NSPasteboard.StringPboardType)), null);
         if(!generalPasteboard.setStringForType(this.getSelectedPath().getAbsolute(), NSPasteboard.StringPboardType)) {
             log.error("Error writing absolute path of selected item to NSPasteboard.StringPboardType.");
         }
     }
 
-    public void paste(final Object sender) {
-        final NSPasteboard pboard = NSPasteboard.pasteboardWithName(CDPasteboards.TransferPasteboard);
-        if(pboard.availableTypeFromArray(new NSArray(CDPasteboards.TransferPasteboardType)) != null) {
-            Object o = pboard.propertyListForType(CDPasteboards.TransferPasteboardType);// get the data from paste board
-            if(o != null) {
-                final Map<Path, Path> files = new HashMap<Path, Path>();
-                Path parent = this.workdir();
-                if(this.getSelectionCount() == 1) {
-                    Path selected = this.getSelectedPath();
-                    if(selected.attributes.isDirectory()) {
-                        parent = selected;
-                    }
-                    else {
-                        parent = (Path) selected.getParent();
-                    }
-                }
-                final NSArray elements = (NSArray) o;
-                for(int i = 0; i < elements.count(); i++) {
-                    NSDictionary dict = (NSDictionary) elements.objectAtIndex(i);
-                    Transfer q = TransferFactory.create(dict);
-                    for(Iterator<Path> iter = q.getRoots().iterator(); iter.hasNext();) {
-                        final Path next = iter.next();
-                        Path current = PathFactory.createPath(getSession(),
-                                next.getAbsolute(), next.attributes.getType());
-                        Path renamed = PathFactory.createPath(getSession(),
-                                parent.getAbsolute(), current.getName(), next.attributes.getType());
-                        files.put(current, renamed);
-                    }
-                }
-                this.renamePaths(files);
-                pboard.declareTypes(null, null);
+    @Action
+    public void paste(final ID sender) {
+        final PathPasteboard<NSDictionary> pasteboard = PathPasteboard.getPasteboard(this.getSession().getHost());
+        if(pasteboard.isEmpty()) {
+            return;
+        }
+        final Map<Path, Path> files = new HashMap<Path, Path>();
+        Path parent = this.workdir();
+        if(this.getSelectionCount() == 1) {
+            Path selected = this.getSelectedPath();
+            if(selected.attributes.isDirectory()) {
+                parent = selected;
+            }
+            else {
+                parent = selected.getParent();
             }
         }
+        for(final Path next : pasteboard.getFiles(this.getSession())) {
+            Path current = PathFactory.createPath(getSession(),
+                    next.getAbsolute(), next.attributes.getType());
+            Path renamed = PathFactory.createPath(getSession(),
+                    parent.getAbsolute(), current.getName(), next.attributes.getType());
+            files.put(current, renamed);
+        }
+        pasteboard.clear();
+        this.renamePaths(files);
     }
 
-    public void pasteFromFinder(final Object sender) {
+    @Action
+    public void pasteFromFinder(final ID sender) {
         NSPasteboard pboard = NSPasteboard.generalPasteboard();
-        if(pboard.availableTypeFromArray(new NSArray(NSPasteboard.FilenamesPboardType)) != null) {
-            Object o = pboard.propertyListForType(NSPasteboard.FilenamesPboardType);
+        if(pboard.availableTypeFromArray(NSArray.arrayWithObject(NSPasteboard.FilenamesPboardType)) != null) {
+            NSObject o = pboard.propertyListForType(NSPasteboard.FilenamesPboardType);
             if(o != null) {
-                NSArray elements = (NSArray) o;
+                final NSArray elements = Rococoa.cast(o, NSArray.class);
                 final Path workdir = this.workdir();
                 final Session session = this.getTransferSession();
                 final List<Path> roots = new Collection<Path>();
-                for(int i = 0; i < elements.count(); i++) {
+                for(int i = 0; i < elements.count().intValue(); i++) {
                     Path p = PathFactory.createPath(session,
                             workdir.getAbsolute(),
-                            new Local((String) elements.objectAtIndex(i)));
+                            LocalFactory.createLocal(elements.objectAtIndex(new NSUInteger(i)).toString()));
                     roots.add(p);
                 }
                 final Transfer q = new UploadTransfer(roots);
@@ -3320,7 +2810,8 @@ public class CDBrowserController extends CDWindowController
         }
     }
 
-    public void copyURLButtonClicked(final Object sender) {
+    @Action
+    public void copyURLButtonClicked(final ID sender) {
         final StringBuffer url = new StringBuffer();
         if(this.getSelectionCount() > 0) {
             for(Iterator<Path> iter = this.getSelectedPaths().iterator(); iter.hasNext();) {
@@ -3334,21 +2825,23 @@ public class CDBrowserController extends CDWindowController
             url.append(this.workdir().toURL());
         }
         NSPasteboard pboard = NSPasteboard.generalPasteboard();
-        pboard.declareTypes(new NSArray(NSPasteboard.StringPboardType), null);
+        pboard.declareTypes(NSArray.arrayWithObject(NSString.stringWithString(NSPasteboard.StringPboardType)), null);
         if(!pboard.setStringForType(url.toString(), NSPasteboard.StringPboardType)) {
             log.error("Error writing URL to NSPasteboard.StringPboardType.");
         }
     }
 
-    public void copyWebURLButtonClicked(final Object sender) {
+    @Action
+    public void copyWebURLButtonClicked(final ID sender) {
         NSPasteboard pboard = NSPasteboard.generalPasteboard();
-        pboard.declareTypes(new NSArray(NSPasteboard.StringPboardType), null);
-        if(!pboard.setStringForType(this.getSelectedPathWebUrl(), NSPasteboard.StringPboardType)) {
+        pboard.declareTypes(NSArray.arrayWithObject(NSPasteboard.StringPboardType), null);
+        if(!pboard.setString_forType(this.getSelectedPathWebUrl(), NSPasteboard.StringPboardType)) {
             log.error("Error writing URL to NSPasteboard.StringPboardType.");
         }
     }
 
-    public void openTerminalButtonClicked(final Object sender) {
+    @Action
+    public void openTerminalButtonClicked(final ID sender) {
         final boolean identity = this.getSession().getHost().getCredentials().isPublicKeyAuthentication();
         String workdir = null;
         if(this.getSelectionCount() == 1) {
@@ -3358,7 +2851,7 @@ public class CDBrowserController extends CDWindowController
             }
         }
         if(null == workdir) {
-            workdir = this.workdir.getAbsolute();
+            workdir = this.workdir().getAbsolute();
         }
         final String command
                 = "tell application \"Terminal\"\n"
@@ -3374,30 +2867,20 @@ public class CDBrowserController extends CDWindowController
                 + "\\\"cd " + workdir + " && exec \\\\$SHELL\\\"\""
                 + "\n"
                 + "end tell";
-        NSAppleScript as = new NSAppleScript(command);
-        final NSMutableDictionary result = new NSMutableDictionary();
-        as.execute(result);
-        if(!(result.count() == 0)) {
-            final Enumeration errors = result.keyEnumerator();
-            while(errors.hasMoreElements()) {
-                log.error(result.valueForKey(errors.nextElement().toString()));
-            }
-        }
+        final NSAppleScript as = NSAppleScript.createWithSource(command);
+        as.executeAndReturnError(new PointerByReference());
         NSWorkspace.sharedWorkspace().launchApplication(
                 NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier("com.apple.Terminal")
         );
     }
 
-    /**
-     * @param sender
-     */
+    @Action
     public void archiveMenuClicked(final NSMenuItem sender) {
-        this.archiveClicked((Archive) sender.representedObject());
+        final Archive archive = Archive.forName(sender.representedObject());
+        this.archiveClicked(archive);
     }
 
-    /**
-     * @param sender
-     */
+    @Action
     public void archiveButtonClicked(final NSToolbarItem sender) {
         this.archiveClicked(Archive.TARGZ);
     }
@@ -3413,21 +2896,21 @@ public class CDBrowserController extends CDWindowController
                 session.archive(archive, selected);
             }
 
+            @Override
             public void cleanup() {
                 // Update Selection
                 reloadData(Collections.singletonList(archive.getArchive(selected)));
             }
 
+            @Override
             public String getActivity() {
                 return archive.getCompressCommand(selected);
             }
         });
     }
 
-    /**
-     * @param sender
-     */
-    public void unarchiveButtonClicked(final Object sender) {
+    @Action
+    public void unarchiveButtonClicked(final ID sender) {
         final List<Path> expanded = new ArrayList<Path>();
         for(final Path selected : this.getSelectedPaths()) {
             final Archive archive = Archive.forName(selected.getName());
@@ -3439,12 +2922,14 @@ public class CDBrowserController extends CDWindowController
                     session.unarchive(archive, selected);
                 }
 
+                @Override
                 public void cleanup() {
                     expanded.addAll(archive.getExpanded(Collections.singletonList(selected)));
                     // Update Selection
                     reloadData(expanded);
                 }
 
+                @Override
                 public String getActivity() {
                     return archive.getDecompressCommand(selected);
                 }
@@ -3468,12 +2953,31 @@ public class CDBrowserController extends CDWindowController
     }
 
     /**
+     * @param path
+     * @return Null if not mounted or lookup fails
+     */
+    public Path lookup(OutlinePathReference path) {
+        if(this.isMounted()) {
+            return this.getSession().cache().lookup(path);
+        }
+        return null;
+    }
+
+    /**
      * Accessor to the working directory
      *
      * @return The current working directory or null if no file system is mounted
      */
     protected Path workdir() {
         return this.workdir;
+    }
+
+    public void setWorkdir(final Path directory) {
+        this.setWorkdir(directory, Collections.<Path>emptyList());
+    }
+
+    public void setWorkdir(final Path directory, Path selected) {
+        this.setWorkdir(directory, Collections.singletonList(selected));
     }
 
     /**
@@ -3484,7 +2988,7 @@ public class CDBrowserController extends CDWindowController
      *
      * @param directory The new working directory to display or null to detach any working directory from the browser
      */
-    public void setWorkdir(final Path directory) {
+    public void setWorkdir(final Path directory, final List<Path> selected) {
         log.debug("setWorkdir:" + directory);
         if(null == directory) {
             // Clear the browser view if no working directory is given
@@ -3494,8 +2998,9 @@ public class CDBrowserController extends CDWindowController
             return;
         }
         this.background(new BrowserBackgroundAction(this) {
+            @Override
             public String getActivity() {
-                return MessageFormat.format(NSBundle.localizedString("Listing directory {0}", "Status", ""),
+                return MessageFormat.format(Locale.localizedString("Listing directory {0}", "Status"),
                         directory.getName());
             }
 
@@ -3510,10 +3015,11 @@ public class CDBrowserController extends CDWindowController
                     // Update the working directory if listing is successful
                     workdir = directory;
                     // Update the current working directory
-                    addPathToHistory(workdir);
+                    addPathToHistory(workdir());
                 }
             }
 
+            @Override
             public void cleanup() {
                 // Remove any custom file filter
                 setPathFilter(null);
@@ -3524,7 +3030,7 @@ public class CDBrowserController extends CDWindowController
                 validateNavigationButtons();
 
                 // Mark the browser data source as dirty
-                reloadData(false);
+                reloadData(selected);
             }
         });
     }
@@ -3643,16 +3149,17 @@ public class CDBrowserController extends CDWindowController
         this.setEncoding(this.session.getEncoding());
         this.session.addProgressListener(new ProgressListener() {
             public void message(final String message) {
-                CDMainApplication.invoke(new WindowMainAction(CDBrowserController.this) {
+                invoke(new WindowMainAction(CDBrowserController.this) {
                     public void run() {
                         updateStatusLabel(message);
                     }
-                }, true);
+                });
             }
         });
         session.addConnectionListener(listener = new ConnectionAdapter() {
+            @Override
             public void connectionWillOpen() {
-                CDMainApplication.invoke(new WindowMainAction(CDBrowserController.this) {
+                invoke(new WindowMainAction(CDBrowserController.this) {
                     public void run() {
                         bookmarkTable.setNeedsDisplay();
                         window.setTitle(host.getNickname());
@@ -3661,45 +3168,48 @@ public class CDBrowserController extends CDWindowController
                 });
             }
 
+            @Override
             public void connectionDidOpen() {
-                CDMainApplication.invoke(new WindowMainAction(CDBrowserController.this) {
+                invoke(new WindowMainAction(CDBrowserController.this) {
                     public void run() {
                         getSelectedBrowserView().setNeedsDisplay();
                         bookmarkTable.setNeedsDisplay();
 
                         Growl.instance().notify("Connection opened", host.getHostname());
 
-                        HistoryCollection.defaultCollection().add(host);
+                        final HistoryCollection history = HistoryCollection.defaultCollection();
+                        history.add(host);
 
                         // Set the window title
-                        window.setRepresentedFilename(host.getFile().getAbsolute());
+                        window.setRepresentedFilename(history.getFile(host).getAbsolute());
 
                         if(Preferences.instance().getBoolean("browser.confirmDisconnect")) {
                             window.setDocumentEdited(true);
                         }
-                        securityLabel.setImage(session.isSecure() ? NSImage.imageNamed("locked.tiff")
-                                : NSImage.imageNamed("unlocked.tiff"));
+                        securityLabel.setImage(session.isSecure() ? CDIconCache.iconNamed("locked.tiff")
+                                : CDIconCache.iconNamed("unlocked.tiff"));
                         securityLabel.setEnabled(session instanceof SSLSession);
                     }
                 });
             }
 
+            @Override
             public void connectionDidClose() {
-                CDMainApplication.invoke(new WindowMainAction(CDBrowserController.this) {
+                invoke(new WindowMainAction(CDBrowserController.this) {
                     public void run() {
                         getSelectedBrowserView().setNeedsDisplay();
                         bookmarkTable.setNeedsDisplay();
 
                         if(!isMounted()) {
-                            window.setTitle((String) NSBundle.mainBundle().infoDictionary().objectForKey("CFBundleName"));
+                            window.setTitle(NSBundle.mainBundle().infoDictionary().objectForKey("CFBundleName").toString());
                             window.setRepresentedFilename("");
                         }
                         window.setDocumentEdited(false);
 
-                        securityLabel.setImage(NSImage.imageNamed("unlocked.tiff"));
+                        securityLabel.setImage(CDIconCache.iconNamed("unlocked.tiff"));
                         securityLabel.setEnabled(false);
 
-                        updateStatusLabel(null);
+                        updateStatusLabel();
                     }
                 });
             }
@@ -3710,7 +3220,7 @@ public class CDBrowserController extends CDWindowController
         session.addTranscriptListener(new TranscriptListener() {
             public void log(final boolean request, final String message) {
                 if(logDrawer.state() == NSDrawer.OpenState) {
-                    CDMainApplication.invoke(new WindowMainAction(CDBrowserController.this) {
+                    invoke(new WindowMainAction(CDBrowserController.this) {
                         public void run() {
                             transcript.log(request, message);
                         }
@@ -3727,7 +3237,7 @@ public class CDBrowserController extends CDWindowController
     private Session session;
 
     /**
-     * @param h
+     * @param host
      * @return The session to be used for any further operations
      */
     public void mount(final Host host) {
@@ -3739,22 +3249,27 @@ public class CDBrowserController extends CDWindowController
                 final Session session = init(host);
 
                 background(new BrowserBackgroundAction(CDBrowserController.this) {
+                    private Path mount;
+
                     public void run() {
                         // Mount this session
-                        workdir = session.mount();
+                        mount = session.mount();
                     }
 
+                    @Override
                     public void cleanup() {
                         // Set the working directory
-                        setWorkdir(workdir);
+                        setWorkdir(mount);
                         if(!session.isConnected()) {
                             // Connection attempt failed
+                            log.warn("Mount failed:" + host);
                             unmountImpl();
                         }
                     }
 
+                    @Override
                     public String getActivity() {
-                        return MessageFormat.format(NSBundle.localizedString("Mounting {0}", "Status", ""),
+                        return MessageFormat.format(Locale.localizedString("Mounting {0}", "Status"),
                                 host.getHostname());
                     }
                 });
@@ -3795,12 +3310,13 @@ public class CDBrowserController extends CDWindowController
         if(this.isConnected() || this.isActivityRunning()) {
             if(Preferences.instance().getBoolean("browser.confirmDisconnect")) {
                 // Defer the unmount to the callback function
-                this.alert(NSAlertPanel.criticalAlertPanel(NSBundle.localizedString("Disconnect from", "Alert sheet title") + " " + this.session.getHost().getHostname(), //title
-                        NSBundle.localizedString("The connection will be closed.", "Alert sheet text"), // message
-                        NSBundle.localizedString("Disconnect", "Alert sheet default button"), // defaultbutton
-                        NSBundle.localizedString("Cancel", "Alert sheet alternate button"), // alternate button
+                final NSAlert alert = NSAlert.alert(Locale.localizedString("Disconnect from") + " " + this.session.getHost().getHostname(), //title
+                        Locale.localizedString("The connection will be closed."), // message
+                        Locale.localizedString("Disconnect"), // defaultbutton
+                        Locale.localizedString("Cancel"), // alternate button
                         null //other button
-                ), callback);
+                );
+                this.alert(alert, callback);
                 // No unmount yet
                 return false;
             }
@@ -3821,23 +3337,25 @@ public class CDBrowserController extends CDWindowController
             this.interrupt();
         }
         final Session session = this.getSession();
-        this.background(new BrowserBackgroundAction(this) {
+        this.background(new AbstractBackgroundAction() {
             public void run() {
                 unmountImpl();
             }
 
+            @Override
             public void cleanup() {
                 inspector = null;
-                if(null != session) {
-                    // Clear the cache on the main thread to make sure the browser model is not in an invalid state
-                    session.cache().clear();
-                    session.getHost().getCredentials().setPassword(null);
-                }
+
+                // Clear the cache on the main thread to make sure the browser model is not in an invalid state
+                session.cache().clear();
+                session.getHost().getCredentials().setPassword(null);
+
                 disconnected.run();
             }
 
+            @Override
             public String getActivity() {
-                return MessageFormat.format(NSBundle.localizedString("Disconnecting {0}", "Status", ""),
+                return MessageFormat.format(Locale.localizedString("Disconnecting {0}", "Status"),
                         session.getHost().getHostname());
             }
         });
@@ -3846,8 +3364,6 @@ public class CDBrowserController extends CDWindowController
     /**
      * Will close the session but still display the current working directory without any confirmation
      * from the user
-     *
-     * @param forever The session won't be remounted in any case; will clear the cache
      */
     private void unmountImpl() {
         // This is not synchronized to the <code>mountingLock</code> intentionally; this allows to unmount
@@ -3878,21 +3394,25 @@ public class CDBrowserController extends CDWindowController
                     }
                 }
 
+                @Override
                 public void cleanup() {
                     ;
                 }
 
+                @Override
                 public String getActivity() {
-                    return MessageFormat.format(NSBundle.localizedString("Disconnecting {0}", "Status", ""),
+                    return MessageFormat.format(Locale.localizedString("Disconnecting {0}", "Status"),
                             session.getHost().getHostname());
                 }
 
+                @Override
                 public int retry() {
                     return 0;
                 }
 
                 private final Object lock = new Object();
 
+                @Override
                 public Object lock() {
                     // No synchronization with other tasks
                     return lock;
@@ -3910,30 +3430,31 @@ public class CDBrowserController extends CDWindowController
                 unmountImpl();
             }
 
+            @Override
             public void cleanup() {
                 if(Preferences.instance().getBoolean("browser.disconnect.showBookmarks")) {
                     CDBrowserController.this.toggleBookmarks(true);
                 }
             }
 
+            @Override
             public String getActivity() {
-                return MessageFormat.format(NSBundle.localizedString("Disconnecting {0}", "Status", ""),
+                return MessageFormat.format(Locale.localizedString("Disconnecting {0}", "Status"),
                         session.getHost().getHostname());
             }
         });
     }
 
-    /**
-     * @param sender
-     */
-    public void printDocument(final Object sender) {
-        NSPrintOperation op = NSPrintOperation.printOperationWithView(this.getSelectedBrowserView());
-        op.runModalOperation(this.window, this,
-                new NSSelector("printOperationDidRun",
-                        new Class[]{NSPrintOperation.class, boolean.class, Object.class}), null);
+    @Action
+    public void printDocument(final ID sender) {
+        NSPrintInfo print = NSPrintInfo.sharedPrintInfo();
+        print.setOrientation(NSPrintInfo.NSPrintingOrientation.NSLandscapeOrientation);
+        NSPrintOperation op = NSPrintOperation.printOperationWithView_printInfo(this.getSelectedBrowserView(), print);
+        op.runOperationModalForWindow_delegate_didRunSelector_contextInfo(this.window(), this.id(),
+                Foundation.selector("printOperationDidRun:success:contextInfo:"), null);
     }
 
-    public void printOperationDidRun(NSPrintOperation printOperation, boolean success, Object contextInfo) {
+    public void printOperationDidRun_success_contextInfo(NSPrintOperation printOperation, boolean success, ID contextInfo) {
         if(success) {
             log.info("Successfully printed" + contextInfo);
         }
@@ -3943,39 +3464,30 @@ public class CDBrowserController extends CDWindowController
      * @param app
      * @return NSApplication.TerminateLater if the application should not yet be terminated
      */
-    public static int applicationShouldTerminate(final NSApplication app) {
+    public static NSUInteger applicationShouldTerminate(final NSApplication app) {
         // Determine if there are any open connections
-        NSArray windows = app.windows();
-        int count = windows.count();
-        // Determine if there are any open connections
-        while(0 != count--) {
-            final NSWindow window = (NSWindow) windows.objectAtIndex(count);
-            final CDBrowserController controller = CDBrowserController.controllerForWindow(window);
-            if(null != controller) {
-                if(!controller.unmount(new CDSheetCallback() {
-                    public void callback(final int returncode) {
-                        if(returncode == DEFAULT_OPTION) { //Disconnect
-                            window.close();
-                            if(NSApplication.TerminateNow == CDBrowserController.applicationShouldTerminate(app)) {
-                                app.terminate(null);
-                            }
-                        }
-                        if(returncode == ALTERNATE_OPTION) { //Cancel
-                            app.replyToApplicationShouldTerminate(false);
+        for(final CDBrowserController controller : CDMainController.getBrowsers()) {
+            if(!controller.unmount(new CDSheetCallback() {
+                public void callback(final int returncode) {
+                    if(returncode == DEFAULT_OPTION) { //Disconnect
+                        controller.window().close();
+                        if(NSApplication.NSTerminateNow.equals(CDBrowserController.applicationShouldTerminate(app))) {
+                            app.terminate(null);
                         }
                     }
-                }, new Runnable() {
-                    public void run() {
-                        ;
-                    }
-                })) {
-                    return NSApplication.TerminateLater;
                 }
+            }, new Runnable() {
+                public void run() {
+                    ;
+                }
+            })) {
+                return NSApplication.NSTerminateCancel;
             }
         }
-        return NSApplication.TerminateNow;
+        return NSApplication.NSTerminateNow;
     }
 
+    @Override
     public boolean windowShouldClose(final NSWindow sender) {
         return this.unmount(new Runnable() {
             public void run() {
@@ -3989,102 +3501,89 @@ public class CDBrowserController extends CDWindowController
      * @return true if the menu should be enabled
      */
     public boolean validateMenuItem(NSMenuItem item) {
-        final String action = item.action().name();
-        if(action.equals("pasteFromFinder:")) {
+        final Selector action = item.action();
+        if(action.equals(Foundation.selector("pasteFromFinder:"))) {
             boolean valid = false;
             if(this.isMounted()) {
-                if(NSPasteboard.generalPasteboard().availableTypeFromArray(new NSArray(NSPasteboard.FilenamesPboardType)) != null) {
-                    Object o = NSPasteboard.generalPasteboard().propertyListForType(NSPasteboard.FilenamesPboardType);
+                if(NSPasteboard.generalPasteboard().availableTypeFromArray(NSArray.arrayWithObject(NSPasteboard.FilenamesPboardType)) != null) {
+                    NSObject o = NSPasteboard.generalPasteboard().propertyListForType(NSPasteboard.FilenamesPboardType);
                     if(o != null) {
-                        NSArray elements = (NSArray) o;
-                        if(elements.count() == 1) {
-                            item.setTitle(NSBundle.localizedString("Paste", "Menu item") + " \""
-                                    + elements.objectAtIndex(0) + "\"");
+                        final NSArray elements = Rococoa.cast(o, NSArray.class);
+                        if(elements.count().intValue() == 1) {
+                            item.setTitle(Locale.localizedString("Paste") + " \""
+                                    + elements.objectAtIndex(new NSUInteger(0)) + "\"");
                         }
                         else {
-                            item.setTitle(NSBundle.localizedString("Paste from Finder", "Menu item") + " (" +
-                                    elements.count() + " " +
-                                    NSBundle.localizedString("files", "") + ")");
+                            item.setTitle(Locale.localizedString("Paste from Finder") + " (" +
+                                    elements.count().intValue() + " " +
+                                    Locale.localizedString("files") + ")");
                         }
                         valid = true;
                     }
                 }
             }
             if(!valid) {
-                item.setTitle(NSBundle.localizedString("Paste from Finder", "Menu item"));
+                item.setTitle(Locale.localizedString("Paste from Finder"));
             }
         }
-        else if(action.equals("paste:")) {
-            boolean valid = false;
-            if(this.isMounted()) {
-                NSPasteboard pboard = NSPasteboard.pasteboardWithName(CDPasteboards.TransferPasteboard);
-                if(pboard.availableTypeFromArray(new NSArray(CDPasteboards.TransferPasteboardType)) != null) {
-                    Object o = pboard.propertyListForType(CDPasteboards.TransferPasteboardType);
-                    if(o != null) {
-                        NSArray elements = (NSArray) o;
-                        for(int i = 0; i < elements.count(); i++) {
-                            NSDictionary dict = (NSDictionary) elements.objectAtIndex(i);
-                            Transfer q = TransferFactory.create(dict);
-                            if(q.numberOfRoots() == 1) {
-                                item.setTitle(NSBundle.localizedString("Paste", "Menu item") + " \""
-                                        + q.getRoot().getName() + "\"");
-                            }
-                            else {
-                                item.setTitle(NSBundle.localizedString("Paste", "Menu item")
-                                        + " (" + q.numberOfRoots() + " " +
-                                        NSBundle.localizedString("files", "") + ")");
-                            }
-                            valid = true;
-                        }
-                    }
+        else if(action.equals(Foundation.selector("paste:"))) {
+            if(this.isMounted() && !PathPasteboard.getPasteboard(this.getSession().getHost()).isEmpty()) {
+                if(PathPasteboard.getPasteboard(this.getSession().getHost()).size() == 1) {
+                    item.setTitle(Locale.localizedString("Paste") + " \""
+                            + PathPasteboard.getPasteboard(this.getSession().getHost()).getFiles(this.getSession()).get(0).getName() + "\"");
+                }
+                else {
+                    item.setTitle(Locale.localizedString("Paste")
+                            + " (" + PathPasteboard.getPasteboard(this.getSession().getHost()).size() + " " +
+                            Locale.localizedString("files") + ")");
                 }
             }
-            if(!valid) {
-                item.setTitle(NSBundle.localizedString("Paste", "Menu item"));
+            else {
+                item.setTitle(Locale.localizedString("Paste"));
             }
         }
-        else if(action.equals("cut:")) {
+        else if(action.equals(Foundation.selector("cut:"))) {
             int count = this.getSelectionCount();
             if(this.isMounted() && count > 0) {
                 if(count > 1) {
-                    item.setTitle(NSBundle.localizedString("Cut", "Menu item")
+                    item.setTitle(Locale.localizedString("Cut")
                             + " " + this.getSelectionCount() + " " +
-                            NSBundle.localizedString("files", ""));
+                            Locale.localizedString("files"));
                 }
                 else {
-                    item.setTitle(NSBundle.localizedString("Cut", "Menu item") + " \"" + this.getSelectedPath().getName() + "\"");
+                    item.setTitle(Locale.localizedString("Cut") + " \"" + this.getSelectedPath().getName() + "\"");
                 }
             }
             else {
-                item.setTitle(NSBundle.localizedString("Cut", "Menu item"));
+                item.setTitle(Locale.localizedString("Cut"));
             }
         }
-        else if(action.equals("showHiddenFilesClicked:")) {
-            item.setState(this.getFileFilter() instanceof NullPathFilter ? NSCell.OnState : NSCell.OffState);
+        else if(action.equals(Foundation.selector("showHiddenFilesClicked:"))) {
+            item.setState(this.getFileFilter() instanceof NullPathFilter ? NSCell.NSOnState : NSCell.NSOffState);
         }
-        else if(action.equals("encodingMenuClicked:")) {
+        else if(action.equals(Foundation.selector("encodingMenuClicked:"))) {
             if(this.isMounted()) {
                 item.setState(this.session.getEncoding().equalsIgnoreCase(
-                        item.title()) ? NSCell.OnState : NSCell.OffState);
+                        item.title()) ? NSCell.NSOnState : NSCell.NSOffState);
             }
             else {
                 item.setState(Preferences.instance().getProperty("browser.charset.encoding").equalsIgnoreCase(
-                        item.title()) ? NSCell.OnState : NSCell.OffState);
+                        item.title()) ? NSCell.NSOnState : NSCell.NSOffState);
             }
         }
-        else if(action.equals("browserSwitchMenuClicked:")) {
+        else if(action.equals(Foundation.selector("browserSwitchMenuClicked:"))) {
             if(item.tag() == Preferences.instance().getInteger("browser.view")) {
-                item.setState(NSCell.OnState);
+                item.setState(NSCell.NSOnState);
             }
             else {
-                item.setState(NSCell.OffState);
+                item.setState(NSCell.NSOffState);
             }
         }
-        else if(action.equals("archiveMenuClicked:")) {
-            final Archive archive = (Archive) item.representedObject();
+        else if(action.equals(Foundation.selector("archiveMenuClicked:"))) {
+            final Archive archive = Archive.forName(item.representedObject());
             item.setTitle(archive.getTitle(this.getSelectedPaths()));
         }
-        else if(action.equals("quicklookButtonClicked:")) {
+        else if(action.equals(Foundation.selector("quicklookButtonClicked:"))) {
             item.setKeyEquivalent(" ");
             item.setKeyEquivalentModifierMask(0);
         }
@@ -4095,14 +3594,14 @@ public class CDBrowserController extends CDWindowController
      * @param action the method selector
      * @return true if the item by that identifier should be enabled
      */
-    private boolean validateItem(final String action) {
-        if(action.equals("cut:")) {
+    private boolean validateItem(final Selector action) {
+        if(action.equals(Foundation.selector("cut:"))) {
             return this.isMounted() && this.getSelectionCount() > 0;
         }
-        if(action.equals("pasteFromFinder:")) {
+        else if(action.equals(Foundation.selector("pasteFromFinder:"))) {
             if(this.isMounted()) {
                 NSPasteboard pboard = NSPasteboard.generalPasteboard();
-                if(pboard.availableTypeFromArray(new NSArray(NSPasteboard.FilenamesPboardType)) != null) {
+                if(pboard.availableTypeFromArray(NSArray.arrayWithObject(NSPasteboard.FilenamesPboardType)) != null) {
                     Object o = pboard.propertyListForType(NSPasteboard.FilenamesPboardType);
                     if(o != null) {
                         return true;
@@ -4111,34 +3610,28 @@ public class CDBrowserController extends CDWindowController
             }
             return false;
         }
-        if(action.equals("paste:")) {
+        else if(action.equals(Foundation.selector("paste:"))) {
             if(this.isMounted()) {
-                NSPasteboard pboard = NSPasteboard.pasteboardWithName(CDPasteboards.TransferPasteboard);
-                if(pboard.availableTypeFromArray(new NSArray(CDPasteboards.TransferPasteboardType)) != null) {
-                    Object o = pboard.propertyListForType(CDPasteboards.TransferPasteboardType);
-                    if(o != null) {
-                        return true;
-                    }
-                }
+                return !PathPasteboard.getPasteboard(this.getSession().getHost()).isEmpty();
             }
             return false;
         }
-        if(action.equals("encodingMenuClicked:")) {
+        else if(action.equals(Foundation.selector("encodingMenuClicked:"))) {
             return !isActivityRunning();
         }
-        if(action.equals("connectBookmarkButtonClicked:")) {
-            return bookmarkTable.numberOfSelectedRows() == 1;
+        else if(action.equals(Foundation.selector("connectBookmarkButtonClicked:"))) {
+            return bookmarkTable.numberOfSelectedRows().intValue() == 1;
         }
-        if(action.equals("addBookmarkButtonClicked:")) {
+        else if(action.equals(Foundation.selector("addBookmarkButtonClicked:"))) {
             return bookmarkModel.getSource().allowsAdd();
         }
-        if(action.equals("deleteBookmarkButtonClicked:")) {
-            return bookmarkModel.getSource().allowsDelete() && bookmarkTable.selectedRow() != -1;
+        else if(action.equals(Foundation.selector("deleteBookmarkButtonClicked:"))) {
+            return bookmarkModel.getSource().allowsDelete() && bookmarkTable.selectedRow().intValue() != -1;
         }
-        if(action.equals("editBookmarkButtonClicked:")) {
-            return bookmarkModel.getSource().allowsEdit() && bookmarkTable.numberOfSelectedRows() == 1;
+        else if(action.equals(Foundation.selector("editBookmarkButtonClicked:"))) {
+            return bookmarkModel.getSource().allowsEdit() && bookmarkTable.numberOfSelectedRows().intValue() == 1;
         }
-        if(action.equals("editButtonClicked:")) {
+        else if(action.equals(Foundation.selector("editButtonClicked:"))) {
             if(this.isMounted() && this.getSelectionCount() > 0) {
                 String editor = EditorFactory.getSelectedEditor();
                 if(null == editor) {
@@ -4153,7 +3646,7 @@ public class CDBrowserController extends CDWindowController
             }
             return false;
         }
-        if(action.equals("editMenuClicked:")) {
+        else if(action.equals(Foundation.selector("editMenuClicked:"))) {
             if(this.isMounted() && this.getSelectionCount() > 0) {
                 for(Path selected : this.getSelectedPaths()) {
                     if(!this.isEditable(selected)) {
@@ -4164,31 +3657,31 @@ public class CDBrowserController extends CDWindowController
             }
             return false;
         }
-        if(action.equals("searchButtonClicked:")) {
+        else if(action.equals(Foundation.selector("searchButtonClicked:"))) {
             return this.isMounted() || this.getSelectedTabView() == TAB_BOOKMARKS;
         }
-        if(action.equals("quicklookButtonClicked:")) {
-            return QuickLook.isAvailable() && this.isMounted() && this.getSelectionCount() > 0;
+        else if(action.equals(Foundation.selector("quicklookButtonClicked:"))) {
+            return QuickLookFactory.instance().isAvailable() && this.isMounted() && this.getSelectionCount() > 0;
         }
-        if(action.equals("openBrowserButtonClicked:")) {
+        else if(action.equals(Foundation.selector("openBrowserButtonClicked:"))) {
             return this.isMounted();
         }
-        if(action.equals("sendCustomCommandClicked:")) {
+        else if(action.equals(Foundation.selector("sendCustomCommandClicked:"))) {
             return this.isMounted() && this.getSession().isSendCommandSupported();
         }
-        if(action.equals("gotoButtonClicked:")) {
+        else if(action.equals(Foundation.selector("gotoButtonClicked:"))) {
             return this.isMounted();
         }
-        if(action.equals("infoButtonClicked:")) {
+        else if(action.equals(Foundation.selector("infoButtonClicked:"))) {
             return this.isMounted() && this.getSelectionCount() > 0;
         }
-        if(action.equals("createFolderButtonClicked:")) {
+        else if(action.equals(Foundation.selector("createFolderButtonClicked:"))) {
             return this.isMounted() && this.workdir().isMkdirSupported();
         }
-        if(action.equals("createFileButtonClicked:")) {
+        else if(action.equals(Foundation.selector("createFileButtonClicked:"))) {
             return this.isMounted();
         }
-        if(action.equals("duplicateFileButtonClicked:")) {
+        else if(action.equals(Foundation.selector("duplicateFileButtonClicked:"))) {
             if(this.isMounted() && this.getSelectionCount() == 1) {
                 final Path selected = this.getSelectedPath();
                 if(null == selected) {
@@ -4198,7 +3691,7 @@ public class CDBrowserController extends CDWindowController
             }
             return false;
         }
-        if(action.equals("renameFileButtonClicked:")) {
+        else if(action.equals(Foundation.selector("renameFileButtonClicked:"))) {
             if(this.isMounted() && this.getSelectionCount() == 1) {
                 final Path selected = this.getSelectedPath();
                 if(null == selected) {
@@ -4208,22 +3701,22 @@ public class CDBrowserController extends CDWindowController
             }
             return false;
         }
-        if(action.equals("deleteFileButtonClicked:")) {
+        else if(action.equals(Foundation.selector("deleteFileButtonClicked:"))) {
             return this.isMounted() && this.getSelectionCount() > 0;
         }
-        if(action.equals("reloadButtonClicked:")) {
+        else if(action.equals(Foundation.selector("reloadButtonClicked:"))) {
             return this.isMounted();
         }
-        if(action.equals("newBrowserButtonClicked:")) {
+        else if(action.equals(Foundation.selector("newBrowserButtonClicked:"))) {
             return this.isMounted();
         }
-        if(action.equals("uploadButtonClicked:")) {
+        else if(action.equals(Foundation.selector("uploadButtonClicked:"))) {
             return this.isMounted();
         }
-        if(action.equals("syncButtonClicked:")) {
+        else if(action.equals(Foundation.selector("syncButtonClicked:"))) {
             return this.isMounted();
         }
-        if(action.equals("downloadAsButtonClicked:")) {
+        else if(action.equals(Foundation.selector("downloadAsButtonClicked:"))) {
             if(this.isMounted() && this.getSelectionCount() == 1) {
                 final Path selected = this.getSelectedPath();
                 if(null == selected) {
@@ -4233,7 +3726,7 @@ public class CDBrowserController extends CDWindowController
             }
             return false;
         }
-        if(action.equals("downloadToButtonClicked:") || action.equals("downloadButtonClicked:")) {
+        else if(action.equals(Foundation.selector("downloadToButtonClicked:")) || action.equals(Foundation.selector("downloadButtonClicked:"))) {
             if(this.isMounted() && this.getSelectionCount() > 0) {
                 final Path selected = this.getSelectedPath();
                 if(null == selected) {
@@ -4243,40 +3736,40 @@ public class CDBrowserController extends CDWindowController
             }
             return false;
         }
-        if(action.equals("insideButtonClicked:")) {
+        else if(action.equals(Foundation.selector("insideButtonClicked:"))) {
             return this.isMounted() && this.getSelectionCount() > 0;
         }
-        if(action.equals("upButtonClicked:")) {
+        else if(action.equals(Foundation.selector("upButtonClicked:"))) {
             return this.isMounted() && !this.workdir().isRoot();
         }
-        if(action.equals("backButtonClicked:")) {
+        else if(action.equals(Foundation.selector("backButtonClicked:"))) {
             return this.isMounted() && this.getBackHistory().size() > 1;
         }
-        if(action.equals("forwardButtonClicked:")) {
+        else if(action.equals(Foundation.selector("forwardButtonClicked:"))) {
             return this.isMounted() && this.getForwardHistory().size() > 0;
         }
-        if(action.equals("copyURLButtonClicked:") || action.equals("copyWebURLButtonClicked:")) {
+        else if(action.equals(Foundation.selector("copyURLButtonClicked:")) || action.equals(Foundation.selector("copyWebURLButtonClicked:"))) {
             return this.isMounted();
         }
-        if(action.equals("printDocument:")) {
+        else if(action.equals(Foundation.selector("printDocument:"))) {
             return this.isMounted();
         }
-        if(action.equals("disconnectButtonClicked:")) {
+        else if(action.equals(Foundation.selector("disconnectButtonClicked:"))) {
             if(!this.isConnected()) {
                 return this.isActivityRunning();
             }
             return this.isConnected();
         }
-        if(action.equals("interruptButtonClicked:")) {
+        else if(action.equals(Foundation.selector("interruptButtonClicked:"))) {
             return this.isActivityRunning();
         }
-        if(action.equals("gotofolderButtonClicked:")) {
+        else if(action.equals(Foundation.selector("gotofolderButtonClicked:"))) {
             return this.isMounted();
         }
-        if(action.equals("openTerminalButtonClicked:")) {
+        else if(action.equals(Foundation.selector("openTerminalButtonClicked:"))) {
             return this.isMounted() && this.getSession() instanceof SFTPSession;
         }
-        if(action.equals("archiveButtonClicked:") || action.equals("archiveMenuClicked:")) {
+        else if(action.equals(Foundation.selector("archiveButtonClicked:")) || action.equals(Foundation.selector("archiveMenuClicked:"))) {
             if(this.isMounted()) {
                 if(!this.getSession().isArchiveSupported()) {
                     return false;
@@ -4293,7 +3786,7 @@ public class CDBrowserController extends CDWindowController
             }
             return false;
         }
-        if(action.equals("unarchiveButtonClicked:")) {
+        else if(action.equals(Foundation.selector("unarchiveButtonClicked:"))) {
             if(this.isMounted()) {
                 if(!this.getSession().isUnarchiveSupported()) {
                     return false;
@@ -4313,57 +3806,6 @@ public class CDBrowserController extends CDWindowController
             return false;
         }
         return true; // by default everything is enabled
-    }
-
-    // ----------------------------------------------------------
-    // Toolbar Delegate
-    // ----------------------------------------------------------
-
-    public boolean validateToolbarItem(NSToolbarItem item) {
-        if(item.itemIdentifier().equals(TOOLBAR_EDIT)) {
-            final String selectedEditor = EditorFactory.getSelectedEditor();
-            if(null == selectedEditor) {
-                item.setImage(NSImage.imageNamed("pencil.tiff"));
-            }
-            else {
-                item.setImage(NSWorkspace.sharedWorkspace().iconForFile(
-                        NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier(selectedEditor))
-                );
-            }
-        }
-        if(item.itemIdentifier().equals(TOOLBAR_DISCONNECT)) {
-            if(this.isActivityRunning()) {
-                item.setLabel(NSBundle.localizedString("Stop", "Toolbar item"));
-                item.setPaletteLabel(NSBundle.localizedString("Stop", "Toolbar item"));
-                item.setToolTip(NSBundle.localizedString("Cancel current operation in progress", "Toolbar item tooltip"));
-                item.setImage(CDIconCache.instance().iconForName("stop", 32));
-            }
-            else {
-                item.setLabel(NSBundle.localizedString(TOOLBAR_DISCONNECT, "Toolbar item"));
-                item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_DISCONNECT, "Toolbar item"));
-                item.setToolTip(NSBundle.localizedString("Disconnect from server", "Toolbar item tooltip"));
-                item.setImage(NSImage.imageNamed("eject.tiff"));
-            }
-        }
-        if(item.itemIdentifier().equals(TOOLBAR_ARCHIVE)) {
-            final Path selected = this.getSelectedPath();
-            if(null != selected) {
-                if(Archive.isArchive(selected.getName())) {
-                    item.setLabel(NSBundle.localizedString("Unarchive", "Archive", "Toolbar item"));
-                    item.setPaletteLabel(NSBundle.localizedString("Unarchive", "Toolbar item"));
-                    item.setAction(new NSSelector("unarchiveButtonClicked", new Class[]{Object.class}));
-                }
-                else {
-                    item.setLabel(NSBundle.localizedString("Archive", "Archive", "Toolbar item"));
-                    item.setPaletteLabel(NSBundle.localizedString("Archive", "Toolbar item"));
-                    item.setAction(new NSSelector("archiveButtonClicked", new Class[]{Object.class}));
-                }
-            }
-        }
-        if(item.itemIdentifier().equals(TOOLBAR_QUICKLOOK)) {
-            // Not called because custom view is set
-        }
-        return this.validateItem(item.action().name());
     }
 
     private static final String TOOLBAR_NEW_CONNECTION = "New Connection";
@@ -4390,273 +3832,318 @@ public class CDBrowserController extends CDWindowController
     private static final String TOOLBAR_ARCHIVE = "Archive";
     private static final String TOOLBAR_QUICKLOOK = "Quick Look";
 
+    public boolean validateToolbarItem(final NSToolbarItem item) {
+        final String identifier = item.itemIdentifier();
+        if(identifier.equals(TOOLBAR_EDIT)) {
+            final String selectedEditor = EditorFactory.getSelectedEditor();
+            if(null == selectedEditor) {
+                item.setImage(CDIconCache.iconNamed("pencil.tiff"));
+            }
+            else {
+                item.setImage(NSWorkspace.sharedWorkspace().iconForFile(
+                        NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier(selectedEditor))
+                );
+            }
+        }
+        else if(identifier.equals(TOOLBAR_DISCONNECT)) {
+            if(isActivityRunning()) {
+                item.setLabel(Locale.localizedString("Stop"));
+                item.setPaletteLabel(Locale.localizedString("Stop"));
+                item.setToolTip(Locale.localizedString("Cancel current operation in progress"));
+                item.setImage(CDIconCache.iconNamed("stop", 32));
+            }
+            else {
+                item.setLabel(Locale.localizedString(TOOLBAR_DISCONNECT));
+                item.setPaletteLabel(Locale.localizedString(TOOLBAR_DISCONNECT));
+                item.setToolTip(Locale.localizedString("Disconnect from server"));
+                item.setImage(CDIconCache.iconNamed("eject.tiff"));
+            }
+        }
+        else if(identifier.equals(TOOLBAR_ARCHIVE)) {
+            final Path selected = getSelectedPath();
+            if(null != selected) {
+                if(Archive.isArchive(selected.getName())) {
+                    item.setLabel(Locale.localizedString("Unarchive", "Archive"));
+                    item.setPaletteLabel(Locale.localizedString("Unarchive"));
+                    item.setAction(Foundation.selector("unarchiveButtonClicked:"));
+                }
+                else {
+                    item.setLabel(Locale.localizedString("Archive", "Archive"));
+                    item.setPaletteLabel(Locale.localizedString("Archive"));
+                    item.setAction(Foundation.selector("archiveButtonClicked:"));
+                }
+            }
+        }
+        else if(identifier.equals(TOOLBAR_QUICKLOOK)) {
+            // Not called because custom view is set
+        }
+        return validateItem(item.action());
+    }
+
     /**
-     *
+     * Keep reference to weak toolbar items. A toolbar may ask again for a kind of toolbar
+     * item already supplied to it, in which case this method may return the same toolbar
+     * item it returned before
      */
-    private final EditMenuDelegate editMenuDelegate
-            = new EditMenuDelegate();
+    private Map<String, NSToolbarItem> toolbarItems
+            = new HashMap<String, NSToolbarItem>();
 
-    private final ArchiveMenuDelegate archiveMenuDelegate
-            = new ArchiveMenuDelegate();
-
-    public NSToolbarItem toolbarItemForItemIdentifier(NSToolbar toolbar, final String itemIdentifier, boolean flag) {
-        final NSToolbarItem item = new NSToolbarItem(itemIdentifier);
+    public NSToolbarItem toolbar_itemForItemIdentifier_willBeInsertedIntoToolbar(NSToolbar toolbar, final String itemIdentifier, boolean flag) {
+        log.debug("toolbar_itemForItemIdentifier_willBeInsertedIntoToolbar");
+        if(!toolbarItems.containsKey(itemIdentifier)) {
+            toolbarItems.put(itemIdentifier, NSToolbarItem.itemWithIdentifier(itemIdentifier));
+        }
+        final NSToolbarItem item = toolbarItems.get(itemIdentifier);
         if(itemIdentifier.equals(TOOLBAR_BROWSER_VIEW)) {
-            item.setLabel(NSBundle.localizedString("View", "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString("View", "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Switch Browser View", "Toolbar item tooltip"));
-            item.setView(this.browserSwitchView);
-            // Add a menu representation for text mode of toolbar
-            NSMenuItem viewMenu = new NSMenuItem();
-            viewMenu.setTitle(NSBundle.localizedString("View", "Toolbar item"));
-            NSMenu viewSubmenu = new NSMenu();
-            viewSubmenu.addItem(new NSMenuItem(NSBundle.localizedString("List", "Toolbar item"),
-                    new NSSelector("browserSwitchMenuClicked", new Class[]{Object.class}),
-                    ""));
-            viewSubmenu.itemWithTitle(NSBundle.localizedString("List", "Toolbar item")).setTag(0);
-            viewSubmenu.addItem(new NSMenuItem(NSBundle.localizedString("Outline", "Toolbar item"),
-                    new NSSelector("browserSwitchMenuClicked", new Class[]{Object.class}),
-                    ""));
-            viewSubmenu.itemWithTitle(NSBundle.localizedString("Outline", "Toolbar item")).setTag(1);
-            viewMenu.setSubmenu(viewSubmenu);
-            item.setMenuFormRepresentation(viewMenu);
-            item.setMinSize(this.browserSwitchView.frame().size());
-            item.setMaxSize(this.browserSwitchView.frame().size());
+            item.setLabel(Locale.localizedString("View"));
+            item.setPaletteLabel(Locale.localizedString("View"));
+            item.setToolTip(Locale.localizedString("Switch Browser View"));
+            item.setView(browserSwitchView);
+//            // Add a menu representation for text mode of toolbar
+//            NSMenuItem viewMenu = NSMenuItem.itemWithTitle(Locale.localizedString("View"), null, "");
+//            NSMenu viewSubmenu = NSMenu.menu();
+//            viewSubmenu.addItemWithTitle_action_keyEquivalent(Locale.localizedString("List"),
+//                    Foundation.selector("browserSwitchMenuClicked:"), "");
+//            viewSubmenu.itemWithTitle(Locale.localizedString("List")).setTag(0);
+//            viewSubmenu.addItemWithTitle_action_keyEquivalent(Locale.localizedString("Outline"),
+//                    Foundation.selector("browserSwitchMenuClicked:"), "");
+//            viewSubmenu.itemWithTitle(Locale.localizedString("Outline")).setTag(1);
+//            viewMenu.setSubmenu(viewSubmenu);
+//            item.setMenuFormRepresentation(viewMenu);
+            item.setMinSize(this.browserSwitchView.frame().size);
+            item.setMaxSize(this.browserSwitchView.frame().size);
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_NEW_CONNECTION)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_NEW_CONNECTION, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_NEW_CONNECTION, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Connect to server", "Toolbar item tooltip"));
-            item.setImage(NSImage.imageNamed("connect.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("connectButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_NEW_CONNECTION)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_NEW_CONNECTION));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_NEW_CONNECTION));
+            item.setToolTip(Locale.localizedString("Connect to server"));
+            item.setImage(CDIconCache.iconNamed("connect.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("connectButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_TRANSFERS)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_TRANSFERS, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_TRANSFERS, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Show Transfers window", "Toolbar item tooltip"));
-            item.setImage(NSImage.imageNamed("queue.tiff"));
-            item.setAction(new NSSelector("showTransferQueueClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_TRANSFERS)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_TRANSFERS));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_TRANSFERS));
+            item.setToolTip(Locale.localizedString("Show Transfers window"));
+            item.setImage(CDIconCache.iconNamed("queue.tiff"));
+            item.setAction(Foundation.selector("showTransferQueueClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_TOOLS)) {
-            item.setLabel(NSBundle.localizedString("Action", "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString("Action", "Toolbar item"));
+        else if(itemIdentifier.equals(TOOLBAR_TOOLS)) {
+            item.setLabel(Locale.localizedString("Action"));
+            item.setPaletteLabel(Locale.localizedString("Action"));
             item.setView(this.actionPopupButton);
             // Add a menu representation for text mode of toolbar
-            NSMenuItem toolMenu = new NSMenuItem();
-            toolMenu.setTitle(NSBundle.localizedString("Action", "Toolbar item"));
-            NSMenu toolSubmenu = new NSMenu();
-            for(int i = 1; i < this.actionPopupButton.menu().numberOfItems(); i++) {
-                NSMenuItem template = this.actionPopupButton.menu().itemAtIndex(i);
-                toolSubmenu.addItem(new NSMenuItem(template.title(),
-                        template.action(),
-                        template.keyEquivalent()));
-            }
-            toolMenu.setSubmenu(toolSubmenu);
-            item.setMenuFormRepresentation(toolMenu);
-            item.setMinSize(this.actionPopupButton.frame().size());
-            item.setMaxSize(this.actionPopupButton.frame().size());
+//            NSMenuItem toolMenu = NSMenuItem.itemWithTitle(Locale.localizedString("Action"), null, "");
+//            NSMenu toolSubmenu = NSMenu.menu();
+//            for(int i = 1; i < this.actionPopupButton.menu().numberOfItems().intValue(); i++) {
+//                NSMenuItem template = this.actionPopupButton.menu().itemAtIndex(i);
+//                toolSubmenu.addItem(NSMenuItem.itemWithTitle(template.title(),
+//                        template.action(),
+//                        template.keyEquivalent()));
+//            }
+//            toolMenu.setSubmenu(toolSubmenu);
+//            item.setMenuFormRepresentation(toolMenu);
+            item.setMinSize(this.actionPopupButton.frame().size);
+            item.setMaxSize(this.actionPopupButton.frame().size);
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_QUICK_CONNECT)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_QUICK_CONNECT, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_QUICK_CONNECT, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Connect to server", "Toolbar item tooltip"));
-            item.setView(this.quickConnectPopup);
-            item.setMinSize(this.quickConnectPopup.frame().size());
-            item.setMaxSize(this.quickConnectPopup.frame().size());
+        else if(itemIdentifier.equals(TOOLBAR_QUICK_CONNECT)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_QUICK_CONNECT));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_QUICK_CONNECT));
+            item.setToolTip(Locale.localizedString("Connect to server"));
+            item.setView(quickConnectPopup);
+            item.setMinSize(this.quickConnectPopup.frame().size);
+            item.setMaxSize(this.quickConnectPopup.frame().size);
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_ENCODING)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_ENCODING, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_ENCODING, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Character Encoding", "Toolbar item tooltip"));
+        else if(itemIdentifier.equals(TOOLBAR_ENCODING)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_ENCODING));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_ENCODING));
+            item.setToolTip(Locale.localizedString("Character Encoding"));
             item.setView(this.encodingPopup);
             // Add a menu representation for text mode of toolbar
-            NSMenuItem encodingMenu = new NSMenuItem(NSBundle.localizedString(TOOLBAR_ENCODING, "Toolbar item"),
-                    new NSSelector("encodingMenuClicked", new Class[]{Object.class}),
-                    "");
-            String[] charsets = ((CDMainController) NSApplication.sharedApplication().delegate()).availableCharsets();
-            NSMenu charsetMenu = new NSMenu();
-            for(int i = 0; i < charsets.length; i++) {
-                charsetMenu.addItem(new NSMenuItem(charsets[i],
-                        new NSSelector("encodingMenuClicked", new Class[]{Object.class}),
-                        ""));
-            }
-            encodingMenu.setSubmenu(charsetMenu);
-            item.setMenuFormRepresentation(encodingMenu);
-            item.setMinSize(this.encodingPopup.frame().size());
-            item.setMaxSize(this.encodingPopup.frame().size());
+//            NSMenuItem encodingMenu = NSMenuItem.itemWithTitle(Locale.localizedString(TOOLBAR_ENCODING),
+//                    Foundation.selector("encodingMenuClicked:"),
+//                    "");
+//            String[] charsets = CDMainController.availableCharsets();
+//            NSMenu charsetMenu = NSMenu.menu();
+//            for(String charset : charsets) {
+//                charsetMenu.addItemWithTitle_action_keyEquivalent(charset, Foundation.selector("encodingMenuClicked:"), "");
+//            }
+//            encodingMenu.setSubmenu(charsetMenu);
+//            item.setMenuFormRepresentation(encodingMenu);
+            item.setMinSize(this.encodingPopup.frame().size);
+            item.setMaxSize(this.encodingPopup.frame().size);
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_REFRESH)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_REFRESH, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_REFRESH, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Refresh directory listing", "Toolbar item tooltip"));
-            item.setImage(NSImage.imageNamed("reload.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("reloadButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_REFRESH)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_REFRESH));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_REFRESH));
+            item.setToolTip(Locale.localizedString("Refresh directory listing"));
+            item.setImage(CDIconCache.iconNamed("reload.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("reloadButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_DOWNLOAD)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_DOWNLOAD, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_DOWNLOAD, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Download file", "Toolbar item tooltip"));
-            item.setImage(NSImage.imageNamed("download.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("downloadButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_DOWNLOAD)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_DOWNLOAD));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_DOWNLOAD));
+            item.setToolTip(Locale.localizedString("Download file"));
+            item.setImage(CDIconCache.iconNamed("download.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("downloadButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_UPLOAD)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_UPLOAD, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_UPLOAD, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Upload local file to the remote host", "Toolbar item tooltip"));
-            item.setImage(NSImage.imageNamed("upload.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("uploadButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_UPLOAD)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_UPLOAD));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_UPLOAD));
+            item.setToolTip(Locale.localizedString("Upload local file to the remote host"));
+            item.setImage(CDIconCache.iconNamed("upload.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("uploadButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_SYNCHRONIZE)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_SYNCHRONIZE, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_SYNCHRONIZE, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Synchronize files", "Toolbar item tooltip"));
-            item.setImage(NSImage.imageNamed("sync.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("syncButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_SYNCHRONIZE)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_SYNCHRONIZE));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_SYNCHRONIZE));
+            item.setToolTip(Locale.localizedString("Synchronize files"));
+            item.setImage(CDIconCache.iconNamed("sync.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("syncButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_GET_INFO)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_GET_INFO, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_GET_INFO, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Show file attributes", "Toolbar item tooltip"));
-            item.setImage(NSImage.imageNamed("info.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("infoButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_GET_INFO)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_GET_INFO));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_GET_INFO));
+            item.setToolTip(Locale.localizedString("Show file attributes"));
+            item.setImage(CDIconCache.iconNamed("info.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("infoButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_WEBVIEW)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_WEBVIEW, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString("Open in Web Browser", "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Open in Web Browser", "Toolbar item tooltip"));
+        else if(itemIdentifier.equals(TOOLBAR_WEBVIEW)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_WEBVIEW));
+            item.setPaletteLabel(Locale.localizedString("Open in Web Browser"));
+            item.setToolTip(Locale.localizedString("Open in Web Browser"));
             final String browser = URLSchemeHandlerConfiguration.instance().getDefaultHandlerForURLScheme("http");
             if(null == browser) {
                 item.setEnabled(false);
-                item.setImage(NSImage.imageNamed("notfound.tiff"));
+                item.setImage(CDIconCache.iconNamed("notfound.tiff"));
             }
             else {
                 String path = NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier(browser);
                 if(null == path) {
-                    item.setImage(NSImage.imageNamed("notfound.tiff"));
+                    item.setImage(CDIconCache.iconNamed("notfound.tiff"));
                 }
                 else {
                     item.setImage(NSWorkspace.sharedWorkspace().iconForFile(path));
                 }
             }
-            item.setTarget(this);
-            item.setAction(new NSSelector("openBrowserButtonClicked", new Class[]{Object.class}));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("openBrowserButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_EDIT)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_EDIT, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_EDIT, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Edit file in external editor", "Toolbar item tooltip"));
-            item.setImage(NSImage.imageNamed("pencil.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("editButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_EDIT)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_EDIT));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_EDIT));
+            item.setToolTip(Locale.localizedString("Edit file in external editor"));
+            item.setImage(CDIconCache.iconNamed("pencil.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("editButtonClicked:"));
             // Add a menu representation for text mode of toolbar
-            NSMenuItem toolbarMenu = new NSMenuItem(NSBundle.localizedString(TOOLBAR_EDIT, "Toolbar item"),
-                    new NSSelector("editMenuClicked", new Class[]{Object.class}),
-                    "");
-            NSMenu editMenu = new NSMenu();
-            editMenu.setAutoenablesItems(true);
-            editMenu.setDelegate(editMenuDelegate);
-            toolbarMenu.setSubmenu(editMenu);
-            item.setMenuFormRepresentation(toolbarMenu);
+//            NSMenuItem toolbarMenu = NSMenuItem.itemWithTitle(Locale.localizedString(TOOLBAR_EDIT),
+//                    Foundation.selector("editMenuClicked:"),
+//                    "");
+//            NSMenu editMenu = NSMenu.menu();
+//            editMenu.setAutoenablesItems(true);
+//            editMenu.setDelegate(editMenuDelegate.id());
+//            toolbarMenu.setSubmenu(editMenu);
+//            item.setMenuFormRepresentation(toolbarMenu);
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_DELETE)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_DELETE, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_DELETE, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Delete file", "Toolbar item tooltip"));
-            item.setImage(NSImage.imageNamed("delete.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("deleteFileButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_DELETE)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_DELETE));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_DELETE));
+            item.setToolTip(Locale.localizedString("Delete file"));
+            item.setImage(CDIconCache.iconNamed("delete.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("deleteFileButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_NEW_FOLDER)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_NEW_FOLDER, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_NEW_FOLDER, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Create New Folder", "Toolbar item tooltip"));
-            item.setImage(NSImage.imageNamed("newfolder.icns"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("createFolderButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_NEW_FOLDER)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_NEW_FOLDER));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_NEW_FOLDER));
+            item.setToolTip(Locale.localizedString("Create New Folder"));
+            item.setImage(CDIconCache.iconNamed("newfolder.icns"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("createFolderButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_NEW_BOOKMARK)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_NEW_BOOKMARK, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_NEW_BOOKMARK, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("New Bookmark", "Toolbar item tooltip"));
-            item.setImage(CDIconCache.instance().iconForName("cyberduck-document", 32));
-            item.setTarget(this);
-            item.setAction(new NSSelector("addBookmarkButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_NEW_BOOKMARK)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_NEW_BOOKMARK));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_NEW_BOOKMARK));
+            item.setToolTip(Locale.localizedString("New Bookmark"));
+            item.setImage(CDIconCache.iconNamed("bookmark", 32));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("addBookmarkButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_DISCONNECT)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_DISCONNECT, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_DISCONNECT, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Disconnect from server", "Toolbar item tooltip"));
-            item.setImage(NSImage.imageNamed("eject.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("disconnectButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_DISCONNECT)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_DISCONNECT));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_DISCONNECT));
+            item.setToolTip(Locale.localizedString("Disconnect from server"));
+            item.setImage(CDIconCache.iconNamed("eject.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("disconnectButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_GO_TO_FOLDER)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_GO_TO_FOLDER, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_GO_TO_FOLDER, "Toolbar item"));
-            item.setToolTip(NSBundle.localizedString("Go to Folder", "Toolbar item tooltip"));
-            item.setImage(NSImage.imageNamed("goto.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("gotoButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_GO_TO_FOLDER)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_GO_TO_FOLDER));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_GO_TO_FOLDER));
+            item.setToolTip(Locale.localizedString("Go to Folder"));
+            item.setImage(CDIconCache.iconNamed("goto.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("gotoButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_TERMINAL)) {
+        else if(itemIdentifier.equals(TOOLBAR_TERMINAL)) {
             final String t = NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier("com.apple.Terminal");
-            item.setLabel(NSPathUtilities.displayNameAtPath(t));
-            item.setPaletteLabel(NSPathUtilities.displayNameAtPath(t));
-            item.setImage(CDIconCache.instance().iconForPath(new Local(t), 128));
-            item.setTarget(this);
-            item.setAction(new NSSelector("openTerminalButtonClicked", new Class[]{Object.class}));
+            item.setLabel(NSFileManager.defaultManager().displayNameAtPath(t));
+            item.setPaletteLabel(NSFileManager.defaultManager().displayNameAtPath(t));
+            item.setImage(CDIconCache.instance().iconForPath(LocalFactory.createLocal(t), 128));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("openTerminalButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_ARCHIVE)) {
+        else if(itemIdentifier.equals(TOOLBAR_ARCHIVE)) {
             final String t = NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier("com.apple.archiveutility");
-            item.setLabel(NSBundle.localizedString("Archive", "Archive", "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString("Archive", "Archive", "Toolbar item"));
-            item.setImage(CDIconCache.instance().iconForPath(new Local(t), 128));
-            item.setTarget(this);
-            item.setAction(new NSSelector("archiveButtonClicked", new Class[]{Object.class}));
+            item.setLabel(Locale.localizedString("Archive", "Archive"));
+            item.setPaletteLabel(Locale.localizedString("Archive", "Archive"));
+            item.setImage(CDIconCache.instance().iconForPath(LocalFactory.createLocal(t), 128));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("archiveButtonClicked:"));
             return item;
         }
-        if(itemIdentifier.equals(TOOLBAR_QUICKLOOK)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_QUICKLOOK, "Toolbar item"));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_QUICKLOOK, "Toolbar item"));
-            if(QuickLook.isAvailable()) {
-                quicklookButton = new NSButton(new NSRect(0, 0, 29, 23));
-                quicklookButton.setBezelStyle(NSButtonCell.TexturedRoundedBezelStyle);
-                quicklookButton.setImage(NSImage.imageNamed("NSQuickLookTemplate"));
-//                quicklookButton.setEnabled(false);
-                quicklookButton.setTarget(this);
-                quicklookButton.setAction(new NSSelector("quicklookButtonClicked", new Class[]{Object.class}));
+        else if(itemIdentifier.equals(TOOLBAR_QUICKLOOK)) {
+            item.setLabel(Locale.localizedString(TOOLBAR_QUICKLOOK));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_QUICKLOOK));
+            if(QuickLookFactory.instance().isAvailable()) {
+                quicklookButton = NSButton.buttonWithFrame(new NSRect(29, 23));
+                quicklookButton.setBezelStyle(NSButtonCell.NSTexturedRoundedBezelStyle);
+                quicklookButton.setImage(CDIconCache.iconNamed("NSQuickLookTemplate"));
+                quicklookButton.sizeToFit();
+                quicklookButton.setTarget(this.id());
+                quicklookButton.setAction(Foundation.selector("quicklookButtonClicked:"));
                 item.setView(quicklookButton);
-                item.setMinSize(quicklookButton.frame().size());
-                item.setMaxSize(quicklookButton.frame().size());
+                item.setMinSize(quicklookButton.frame().size);
+                item.setMaxSize(quicklookButton.frame().size);
             }
             else {
                 item.setEnabled(false);
-                item.setImage(NSImage.imageNamed("notfound.tiff"));
+                item.setImage(CDIconCache.iconNamed("notfound.tiff"));
             }
             return item;
         }
@@ -4665,72 +4152,104 @@ public class CDBrowserController extends CDWindowController
         return null;
     }
 
+    @Outlet
     private NSButton quicklookButton;
+
+    private static final NSArray defaultToolbarItems = NSArray.arrayWithObjects(
+            TOOLBAR_NEW_CONNECTION,
+            NSToolbarItem.NSToolbarSeparatorItemIdentifier,
+            TOOLBAR_QUICK_CONNECT,
+            TOOLBAR_TOOLS,
+            NSToolbarItem.NSToolbarSeparatorItemIdentifier,
+            TOOLBAR_REFRESH,
+            TOOLBAR_EDIT,
+            NSToolbarItem.NSToolbarFlexibleSpaceItemIdentifier,
+            TOOLBAR_DISCONNECT
+    );
 
     /**
      * @param toolbar
      * @return The default configuration of toolbar items
      */
     public NSArray toolbarDefaultItemIdentifiers(NSToolbar toolbar) {
-        return new NSArray(new Object[]{
-                TOOLBAR_NEW_CONNECTION,
-                NSToolbarItem.SeparatorItemIdentifier,
-                TOOLBAR_QUICK_CONNECT,
-                TOOLBAR_TOOLS,
-                NSToolbarItem.SeparatorItemIdentifier,
-                TOOLBAR_REFRESH,
-                TOOLBAR_EDIT,
-                NSToolbarItem.FlexibleSpaceItemIdentifier,
-                TOOLBAR_DISCONNECT
-        });
+        return defaultToolbarItems;
     }
+
+    private static final NSArray allowedToolbarItems = NSArray.arrayWithObjects(
+            TOOLBAR_NEW_CONNECTION,
+            TOOLBAR_BROWSER_VIEW,
+            TOOLBAR_TRANSFERS,
+            TOOLBAR_QUICK_CONNECT,
+            TOOLBAR_TOOLS,
+            TOOLBAR_REFRESH,
+            TOOLBAR_ENCODING,
+            TOOLBAR_SYNCHRONIZE,
+            TOOLBAR_DOWNLOAD,
+            TOOLBAR_UPLOAD,
+            TOOLBAR_EDIT,
+            TOOLBAR_DELETE,
+            TOOLBAR_NEW_FOLDER,
+            TOOLBAR_NEW_BOOKMARK,
+            TOOLBAR_GET_INFO,
+            TOOLBAR_WEBVIEW,
+            TOOLBAR_TERMINAL,
+            TOOLBAR_ARCHIVE,
+            TOOLBAR_QUICKLOOK,
+            TOOLBAR_DISCONNECT,
+            NSToolbarItem.NSToolbarCustomizeToolbarItemIdentifier,
+            NSToolbarItem.NSToolbarSpaceItemIdentifier,
+            NSToolbarItem.NSToolbarSeparatorItemIdentifier,
+            NSToolbarItem.NSToolbarFlexibleSpaceItemIdentifier
+    );
 
     /**
      * @param toolbar
      * @return All available toolbar items
      */
     public NSArray toolbarAllowedItemIdentifiers(NSToolbar toolbar) {
-        return new NSArray(new Object[]{
-                TOOLBAR_NEW_CONNECTION,
-                TOOLBAR_BROWSER_VIEW,
-                TOOLBAR_TRANSFERS,
-                TOOLBAR_QUICK_CONNECT,
-//                TOOLBAR_NAVIGATION,
-//                TOOLBAR_HISTORY,
-                TOOLBAR_TOOLS,
-                TOOLBAR_REFRESH,
-                TOOLBAR_ENCODING,
-                TOOLBAR_SYNCHRONIZE,
-                TOOLBAR_DOWNLOAD,
-                TOOLBAR_UPLOAD,
-                TOOLBAR_EDIT,
-                TOOLBAR_DELETE,
-                TOOLBAR_NEW_FOLDER,
-                TOOLBAR_NEW_BOOKMARK,
-                TOOLBAR_GET_INFO,
-                TOOLBAR_WEBVIEW,
-                TOOLBAR_TERMINAL,
-                TOOLBAR_ARCHIVE,
-                TOOLBAR_QUICKLOOK,
-                TOOLBAR_DISCONNECT,
-//                TOOLBAR_GO_TO_FOLDER,
-                NSToolbarItem.CustomizeToolbarItemIdentifier,
-                NSToolbarItem.SpaceItemIdentifier,
-                NSToolbarItem.SeparatorItemIdentifier,
-                NSToolbarItem.FlexibleSpaceItemIdentifier
-        });
+        return allowedToolbarItems;
+    }
+
+    private static final NSArray selectableToolbarItems = NSArray.array();
+
+    public NSArray toolbarSelectableItemIdentifiers(NSToolbar toolbar) {
+        return selectableToolbarItems;
     }
 
     /**
      * Overrriden to remove any listeners from the session
      */
+    @Override
     protected void invalidate() {
         if(this.hasSession()) {
             this.session.removeConnectionListener(this.listener);
         }
-        Rendezvous.instance().removeListener(rendezvousCollectionListener);
-        HistoryCollection.defaultCollection().removeListener(historyCollectionListener);
-        HostCollection.defaultCollection().removeListener(bookmarkCollectionListener);
+
+        bookmarkTable.setDelegate(null);
+        bookmarkTable.setDataSource(null);
+        bookmarkModel.invalidate();
+
+        browserListView.setDelegate(null);
+        browserListView.setDataSource(null);
+        browserListModel.invalidate();
+
+        browserOutlineView.setDelegate(null);
+        browserOutlineView.setDataSource(null);
+        browserOutlineModel.invalidate();
+
+        toolbar.setDelegate(null);
+        toolbarItems.clear();
+
+        browserListColumnsFactory.clear();
+        browserOutlineColumnsFactory.clear();
+        bookmarkTableColumnFactory.clear();
+
+        quickConnectPopup.setDelegate(null);
+        quickConnectPopup.setDataSource(null);
+
+        archiveMenu.setDelegate(null);
+        editMenu.setDelegate(null);
+
         super.invalidate();
     }
 }

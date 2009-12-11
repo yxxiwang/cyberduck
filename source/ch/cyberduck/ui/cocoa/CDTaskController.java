@@ -18,17 +18,17 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSButton;
-import com.apple.cocoa.application.NSProgressIndicator;
-import com.apple.cocoa.application.NSTextField;
-import com.apple.cocoa.application.NSView;
-import com.apple.cocoa.foundation.NSSelector;
-
-import ch.cyberduck.ui.cocoa.threading.BackgroundAction;
-import ch.cyberduck.ui.cocoa.threading.BackgroundActionListener;
-import ch.cyberduck.ui.cocoa.threading.DefaultMainAction;
+import ch.cyberduck.core.threading.BackgroundAction;
+import ch.cyberduck.core.threading.BackgroundActionListener;
+import ch.cyberduck.core.threading.DefaultMainAction;
+import ch.cyberduck.ui.cocoa.application.NSButton;
+import ch.cyberduck.ui.cocoa.application.NSProgressIndicator;
+import ch.cyberduck.ui.cocoa.application.NSTextField;
+import ch.cyberduck.ui.cocoa.application.NSView;
 
 import org.apache.log4j.Logger;
+import org.rococoa.Foundation;
+import org.rococoa.ID;
 
 /**
  * @version $Id$
@@ -36,6 +36,7 @@ import org.apache.log4j.Logger;
 public class CDTaskController extends CDBundleController {
     private static Logger log = Logger.getLogger(CDTaskController.class);
 
+    @Outlet
     private NSTextField name;
 
     public void setName(NSTextField name) {
@@ -43,6 +44,7 @@ public class CDTaskController extends CDBundleController {
         this.name.setStringValue(task.toString());
     }
 
+    @Outlet
     private NSTextField text;
 
     public void setText(NSTextField text) {
@@ -50,6 +52,7 @@ public class CDTaskController extends CDBundleController {
         this.text.setStringValue(task.getActivity());
     }
 
+    @Outlet
     private NSProgressIndicator progress;
 
     public void setProgress(NSProgressIndicator progress) {
@@ -58,24 +61,27 @@ public class CDTaskController extends CDBundleController {
         this.progress.setIndeterminate(true);
     }
 
+    @Outlet
     private NSButton stopButton;
 
     public void setStopButton(NSButton stopButton) {
         this.stopButton = stopButton;
-        this.stopButton.setTarget(this);
-        this.stopButton.setAction(new NSSelector("stopButtonClicked", new Class[]{NSButton.class}));
+        this.stopButton.setTarget(this.id());
+        this.stopButton.setAction(Foundation.selector("stopButtonClicked:"));
     }
 
-    public void stopButtonClicked(Object sender) {
+    public void stopButtonClicked(final ID sender) {
         task.cancel();
     }
 
+    @Outlet
     private NSView view;
 
     public void setView(NSView view) {
         this.view = view;
     }
 
+    @Override
     public NSView view() {
         return view;
     }
@@ -90,7 +96,7 @@ public class CDTaskController extends CDBundleController {
         }
         this.task.addListener(new BackgroundActionListener() {
             public void start(BackgroundAction action) {
-                CDMainApplication.invoke(new DefaultMainAction() {
+                invoke(new DefaultMainAction() {
                     public void run() {
                         progress.startAnimation(null);
                     }
@@ -98,7 +104,7 @@ public class CDTaskController extends CDBundleController {
             }
 
             public void cancel(BackgroundAction action) {
-                CDMainApplication.invoke(new DefaultMainAction() {
+                invoke(new DefaultMainAction() {
                     public void run() {
                         progress.stopAnimation(null);
                     }
@@ -106,7 +112,7 @@ public class CDTaskController extends CDBundleController {
             }
 
             public void stop(BackgroundAction action) {
-                CDMainApplication.invoke(new DefaultMainAction() {
+                invoke(new DefaultMainAction() {
                     public void run() {
                         progress.stopAnimation(null);
                     }
@@ -116,10 +122,7 @@ public class CDTaskController extends CDBundleController {
         });
     }
 
-    public void awakeFromNib() {
-        ;
-    }
-
+    @Override
     protected String getBundleName() {
         return "Task";
     }

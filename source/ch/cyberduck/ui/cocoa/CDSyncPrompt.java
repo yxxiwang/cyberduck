@@ -18,15 +18,14 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.*;
-import com.apple.cocoa.foundation.NSSelector;
-
 import ch.cyberduck.core.Preferences;
 import ch.cyberduck.core.SyncTransfer;
 import ch.cyberduck.core.Transfer;
 import ch.cyberduck.core.TransferAction;
+import ch.cyberduck.ui.cocoa.application.*;
 
 import org.apache.log4j.Logger;
+import org.rococoa.Foundation;
 
 /**
  * @version $Id$
@@ -38,67 +37,54 @@ public class CDSyncPrompt extends CDTransferPrompt {
         super(parent, transfer);
     }
 
+    @Override
     public TransferAction prompt() {
-        this.browserModel = new CDSyncPromptModel(this, transfer);
+        browserModel = new CDSyncPromptModel(this, transfer);
+        action = TransferAction.ACTION_OVERWRITE;
         return super.prompt();
     }
 
+    @Override
     public void setBrowserView(NSOutlineView view) {
         super.setBrowserView(view);
-        NSSelector setResizableMaskSelector
-                = new NSSelector("setResizingMask", new Class[]{int.class});
         {
-            NSTableColumn c = new NSTableColumn();
-            c.setIdentifier(CDSyncPromptModel.SYNC_COLUMN);
+            NSTableColumn c = tableColumnsFactory.create(CDSyncPromptModel.SYNC_COLUMN);
             c.headerCell().setStringValue("");
             c.setMinWidth(20f);
             c.setWidth(20f);
             c.setMaxWidth(20f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask);
             c.setEditable(false);
-            c.setDataCell(new NSImageCell());
-            c.dataCell().setAlignment(NSText.CenterTextAlignment);
+            c.setDataCell(imageCellPrototype);
+            c.dataCell().setAlignment(NSText.NSCenterTextAlignment);
             view.addTableColumn(c);
         }
         {
-            NSTableColumn c = new NSTableColumn();
-            c.setIdentifier(CDSyncPromptModel.CREATE_COLUMN);
+            NSTableColumn c = tableColumnsFactory.create(CDSyncPromptModel.CREATE_COLUMN);
             c.headerCell().setStringValue("");
             c.setMinWidth(20f);
             c.setWidth(20f);
             c.setMaxWidth(20f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask);
             c.setEditable(false);
-            c.setDataCell(new NSImageCell());
-            c.dataCell().setAlignment(NSText.CenterTextAlignment);
+            c.setDataCell(imageCellPrototype);
+            c.dataCell().setAlignment(NSText.NSCenterTextAlignment);
             view.addTableColumn(c);
         }
         view.sizeToFit();
     }
 
+    @Override
     public void callback(final int returncode) {
         if(returncode == DEFAULT_OPTION) { // Continue
             action = TransferAction.ACTION_OVERWRITE;
         }
-        else if(returncode == CANCEL_OPTION) { // Abort
+        else if(returncode == ALTERNATE_OPTION) { // Abort
             action = TransferAction.ACTION_CANCEL;
         }
     }
 
-    // ----------------------------------------------------------
-    // Outlets
-    // ----------------------------------------------------------
-
+    @Override
     public void setActionPopup(final NSPopUpButton actionPopup) {
         this.actionPopup = actionPopup;
         this.actionPopup.removeAllItems();
@@ -112,23 +98,25 @@ public class CDSyncPrompt extends CDTransferPrompt {
                 SyncTransfer.ACTION_MIRROR
         };
 
-        for(int i = 0; i < actions.length; i++) {
-            if(null == actions[i]) {
+        for(TransferAction action : actions) {
+            if(null == action) {
                 continue; //Not resumeable
             }
-            this.actionPopup.addItem(actions[i].getLocalizableString());
-            this.actionPopup.lastItem().setRepresentedObject(actions[i]);
-            if(actions[i].equals(defaultAction)) {
+            this.actionPopup.addItemWithTitle(action.getLocalizableString());
+            this.actionPopup.lastItem().setRepresentedObject(action.toString());
+            if(action.equals(defaultAction)) {
                 this.actionPopup.selectItem(actionPopup.lastItem());
             }
         }
-        this.actionPopup.setTarget(this);
-        this.actionPopup.setAction(new NSSelector("actionPopupClicked", new Class[]{NSPopUpButton.class}));
+        this.actionPopup.setTarget(this.id());
+        this.actionPopup.setAction(Foundation.selector("actionPopupClicked:"));
     }
 
+    @Override
+    @Action
     public void actionPopupClicked(NSPopUpButton sender) {
         final TransferAction current = ((SyncTransfer) transfer).getAction();
-        final TransferAction selected = (TransferAction) sender.selectedItem().representedObject();
+        final TransferAction selected = TransferAction.forName(sender.selectedItem().representedObject());
 
         if(current.equals(selected)) {
             return;
@@ -137,6 +125,6 @@ public class CDSyncPrompt extends CDTransferPrompt {
         Preferences.instance().setProperty("queue.sync.action.default", selected.toString());
         ((SyncTransfer) transfer).setTransferAction(selected);
 
-        this.browserView.reloadData();
+        this.reloadData();
     }
 }

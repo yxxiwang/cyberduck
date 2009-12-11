@@ -18,89 +18,85 @@ package ch.cyberduck.ui.cocoa.delegate;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSApplication;
-import com.apple.cocoa.application.NSMenu;
-import com.apple.cocoa.application.NSMenuItem;
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSSelector;
-
 import ch.cyberduck.core.HistoryCollection;
 import ch.cyberduck.core.Host;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.ui.cocoa.CDBrowserController;
 import ch.cyberduck.ui.cocoa.CDIconCache;
 import ch.cyberduck.ui.cocoa.CDMainController;
+import ch.cyberduck.ui.cocoa.application.NSMenu;
+import ch.cyberduck.ui.cocoa.application.NSMenuItem;
 
 import org.apache.log4j.Logger;
+import org.rococoa.Foundation;
+import org.rococoa.cocoa.foundation.NSInteger;
 
 /**
  * @version $Id$
  */
-public class HistoryMenuDelegate extends MenuDelegate {
+public class HistoryMenuDelegate extends CollectionMenuDelegate<Host> {
     private static Logger log = Logger.getLogger(HistoryMenuDelegate.class);
 
-    /**
-     * @see com.apple.cocoa.application.NSMenu.Delegate
-     */
-    public int numberOfItemsInMenu(NSMenu menu) {
-        if(HistoryCollection.defaultCollection().size() > 0) {
-            // The number of history plus a delimiter and the 'Clear' menu
-            return HistoryCollection.defaultCollection().size() + 2;
-        }
-        return 1;
+    public HistoryMenuDelegate() {
+        super(HistoryCollection.defaultCollection());
     }
 
-    /**
-     * @see com.apple.cocoa.application.NSMenu.Delegate
-     */
-    public boolean menuUpdateItemAtIndex(NSMenu menu, NSMenuItem sender, int index, boolean shouldCancel) {
-        if(HistoryCollection.defaultCollection().size() == 0) {
-            sender.setTitle(NSBundle.localizedString("No recently connected servers available", ""));
+    public NSInteger numberOfItemsInMenu(NSMenu menu) {
+        if(HistoryCollection.defaultCollection().size() > 0) {
+            // The number of history plus a delimiter and the 'Clear' menu
+            return new NSInteger(HistoryCollection.defaultCollection().size() + 2);
+        }
+        return new NSInteger(1);
+    }
+
+    @Override
+    public boolean menuUpdateItemAtIndex(NSMenu menu, NSMenuItem sender, NSInteger index, boolean shouldCancel) {
+        if(shouldCancel) {
+            return false;
+        }
+        if(super.shouldSkipValidation(menu, index.intValue())) {
+            return false;
+        }
+        final int size = HistoryCollection.defaultCollection().size();
+        if(size == 0) {
+            sender.setTitle(Locale.localizedString("No recently connected servers available"));
             sender.setTarget(null);
             sender.setAction(null);
             sender.setImage(null);
             sender.setEnabled(false);
             return false;
         }
-        if(index < HistoryCollection.defaultCollection().size()) {
-            Host h = HistoryCollection.defaultCollection().get(index);
-            // This is a hack. We insert a new NSMenuItem as NSMenu has
-            // a bug caching old entries since we introduced the separator item below
-            menu.removeItemAtIndex(index);
-            NSMenuItem bookmark = new NSMenuItem();
-            bookmark.setTitle(h.getNickname());
-            bookmark.setRepresentedObject(h);
-            bookmark.setTarget(this);
-            bookmark.setEnabled(true);
-            bookmark.setImage(CDIconCache.instance().iconForName(h.getProtocol().icon(), 16));
-            bookmark.setAction(new NSSelector("historyMenuItemClicked", new Class[]{NSMenuItem.class}));
-            menu.insertItemAtIndex(bookmark, index);
+        if(index.intValue() < size) {
+            Host h = HistoryCollection.defaultCollection().get(index.intValue());
+            sender.setTitle(h.getNickname());
+            sender.setAction(Foundation.selector("historyMenuItemClicked:"));
+            sender.setRepresentedObject(h.getNickname());
+            sender.setTarget(this.id());
+            sender.setEnabled(true);
+            sender.setImage(CDIconCache.iconNamed(h.getProtocol().icon(), 16));
             return !shouldCancel;
         }
-        if(index == HistoryCollection.defaultCollection().size()) {
+        if(index.intValue() == size) {
             menu.removeItemAtIndex(index);
-            // There is no way in this wonderful API to add a separator item
-            // without creating a new NSMenuItem first
-            NSMenuItem separator = new NSMenuItem().separatorItem();
-            menu.insertItemAtIndex(separator, index);
+            menu.insertItem_atIndex(NSMenuItem.separatorItem(), index);
             return !shouldCancel;
         }
-        if(index == HistoryCollection.defaultCollection().size() + 1) {
-            menu.removeItemAtIndex(index);
-            NSMenuItem clear = new NSMenuItem();
-            clear.setTitle(NSBundle.localizedString("Clear Menu", ""));
-            clear.setTarget(this);
-            clear.setEnabled(true);
-            clear.setAction(new NSSelector("clearMenuItemClicked", new Class[]{NSMenuItem.class}));
-            menu.insertItemAtIndex(clear, index);
+        if(index.intValue() == size + 1) {
+            sender.setTitle(Locale.localizedString("Clear Menu"));
+            sender.setAction(Foundation.selector("clearMenuItemClicked:"));
+            sender.setTarget(this.id());
+            sender.setEnabled(true);
             return !shouldCancel;
         }
         return true;
     }
 
     public void historyMenuItemClicked(NSMenuItem sender) {
-        CDBrowserController controller
-                = ((CDMainController) NSApplication.sharedApplication().delegate()).newDocument();
-        controller.mount((Host) sender.representedObject());
+        log.debug("historyMenuItemClicked:" + sender);
+        CDBrowserController controller = CDMainController.newDocument();
+        controller.mount(HistoryCollection.defaultCollection().get(
+                HistoryCollection.defaultCollection().indexOf(sender.representedObject())
+        ));
     }
 
     public void clearMenuItemClicked(NSMenuItem sender) {

@@ -53,30 +53,35 @@ static EMKeychainProxy* sharedProxy;
 #pragma mark Getting Keychain Items
 - (EMGenericKeychainItem *)genericKeychainItemForService:(NSString *)serviceNameString withUsername:(NSString *)usernameString
 {
-	if (!usernameString || [usernameString length] == 0)
+	if (!usernameString || [usernameString length] == 0 || !serviceNameString || [serviceNameString length] == 0)
 	{
 		return nil;
 	}
-	
+
 	const char *serviceName = [serviceNameString UTF8String];
 	const char *username = [usernameString UTF8String];
 	
 	UInt32 passwordLength = 0;
-	char *password = nil;
+	void *password = nil;
 	
-	SecKeychainItemRef item = nil;
-	OSStatus returnStatus = SecKeychainFindGenericPassword(NULL, strlen(serviceName), serviceName, strlen(username), username, &passwordLength, (void **)&password, &item);
-	if (returnStatus != noErr || !item)
+	SecKeychainItemRef itemRef = nil;
+	OSStatus returnStatus = SecKeychainFindGenericPassword(NULL, strlen(serviceName), serviceName, strlen(username), username, &passwordLength, (void **)&password, &itemRef);
+	if (returnStatus != noErr || !itemRef)
 	{
 		if (_logErrors)
 		{
-//			NSLog(@"Error (%@) - %s", NSStringFromSelector(_cmd), GetMacOSStatusErrorString(returnStatus));
+			NSLog(@"Error (%@) - %s", NSStringFromSelector(_cmd), GetMacOSStatusErrorString(returnStatus));
 		}
 		return nil;
 	}
-	NSString *passwordString = [NSString stringWithCString:password length:passwordLength];
-
-	return [EMGenericKeychainItem genericKeychainItem:item forServiceName:serviceNameString username:usernameString password:passwordString];
+	NSString *passwordString = [[NSString alloc] initWithData:[NSData dataWithBytes:password length:passwordLength] encoding:NSUTF8StringEncoding];	
+	SecKeychainItemFreeContent(NULL, password);
+	EMGenericKeychainItem *item = [EMGenericKeychainItem genericKeychainItem:itemRef 
+															   forServiceName:serviceNameString 
+																	 username:usernameString 
+																	 password:passwordString];
+	[passwordString release];
+	return item;
 }
 - (EMInternetKeychainItem *)internetKeychainItemForServer:(NSString *)serverString withUsername:(NSString *)usernameString path:(NSString *)pathString port:(int)port protocol:(SecProtocolType)protocol
 {
@@ -94,22 +99,30 @@ static EMKeychainProxy* sharedProxy;
 	}
 	
 	UInt32 passwordLength = 0;
-	char *password = nil;
+	void *password = nil;
 	
-	SecKeychainItemRef item = nil;
-	OSStatus returnStatus = SecKeychainFindInternetPassword(NULL, strlen(server), server, 0, NULL, strlen(username), username, strlen(path), path, port, protocol, kSecAuthenticationTypeDefault, &passwordLength, (void **)&password, &item);
+	SecKeychainItemRef itemRef = nil;
+	OSStatus returnStatus = SecKeychainFindInternetPassword(NULL, strlen(server), server, 0, NULL, strlen(username), username, strlen(path), path, port, protocol, kSecAuthenticationTypeDefault, &passwordLength, (void **)&password, &itemRef);
 	
-	if (returnStatus != noErr || !item)
+	if (returnStatus != noErr || !itemRef)
 	{
 		if (_logErrors)
 		{
-//			NSLog(@"Error (%@) - %s", NSStringFromSelector(_cmd), GetMacOSStatusErrorString(returnStatus));
+			NSLog(@"Error (%@) - %s", NSStringFromSelector(_cmd), GetMacOSStatusErrorString(returnStatus));
 		}
 		return nil;
 	}
-	NSString *passwordString = [NSString stringWithCString:password length:passwordLength];
-	
-	return [EMInternetKeychainItem internetKeychainItem:item forServer:serverString username:usernameString password:passwordString path:pathString port:port protocol:protocol];
+	NSString *passwordString = [[NSString alloc] initWithData:[NSData dataWithBytes:password length:passwordLength] encoding:NSUTF8StringEncoding];	
+	SecKeychainItemFreeContent(NULL, password);
+	EMInternetKeychainItem *item = [EMInternetKeychainItem internetKeychainItem:itemRef 
+																	  forServer:serverString 
+																	   username:usernameString 
+																	   password:passwordString 
+																		   path:pathString 
+																		   port:port 
+																	   protocol:protocol];
+	[passwordString release];
+	return item;
 }
 
 #pragma mark -
@@ -129,7 +142,7 @@ static EMKeychainProxy* sharedProxy;
 	
 	if (returnStatus != noErr || !item)
 	{
-//		NSLog(@"Error (%@) - %s", NSStringFromSelector(_cmd), GetMacOSStatusErrorString(returnStatus));
+		NSLog(@"Error (%@) - %s", NSStringFromSelector(_cmd), GetMacOSStatusErrorString(returnStatus));
 		return nil;
 	}
 	return [EMGenericKeychainItem genericKeychainItem:item forServiceName:serviceNameString username:usernameString password:passwordString];
@@ -156,7 +169,11 @@ static EMKeychainProxy* sharedProxy;
 	if (returnStatus != noErr)
 	{
         if (errSecDuplicateItem == returnStatus) {
-            EMInternetKeychainItem *existing = [self internetKeychainItemForServer:serverString withUsername:usernameString path:pathString port:port protocol:protocol];
+            EMInternetKeychainItem *existing = [self internetKeychainItemForServer:serverString 
+																	  withUsername:usernameString 
+																			  path:pathString 
+																			  port:port
+																		  protocol:protocol];
             if (nil == existing) {
                 return nil;
             }
@@ -165,6 +182,7 @@ static EMKeychainProxy* sharedProxy;
             }
             return existing;
         }
+		NSLog(@"Error (%@) - %s", NSStringFromSelector(_cmd), GetMacOSStatusErrorString(returnStatus));
         return nil;
 	}
 	return [EMInternetKeychainItem internetKeychainItem:item forServer:serverString username:usernameString password:passwordString path:pathString port:port protocol:protocol];

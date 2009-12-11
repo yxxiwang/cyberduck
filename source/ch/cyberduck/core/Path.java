@@ -18,15 +18,16 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSDictionary;
-import com.apple.cocoa.foundation.NSMutableDictionary;
-import com.apple.cocoa.foundation.NSPathUtilities;
-
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.core.io.BandwidthThrottle;
 import ch.cyberduck.core.io.IOResumeException;
 import ch.cyberduck.core.io.ThrottledInputStream;
 import ch.cyberduck.core.io.ThrottledOutputStream;
+import ch.cyberduck.core.serializer.Deserializer;
+import ch.cyberduck.core.serializer.DeserializerFactory;
+import ch.cyberduck.core.serializer.Serializer;
+import ch.cyberduck.core.serializer.SerializerFactory;
+import ch.cyberduck.ui.cocoa.model.OutlinePathReference;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
@@ -46,6 +47,11 @@ import java.util.regex.PatternSyntaxException;
  */
 public abstract class Path extends AbstractPath implements Serializable {
     private static Logger log = Logger.getLogger(Path.class);
+
+    /**
+     *
+     */
+    private PathReference reference;
 
     /**
      * The absolute remote path
@@ -96,45 +102,53 @@ public abstract class Path extends AbstractPath implements Serializable {
         return BINARY_FILETYPE_PATTERN;
     }
 
-    private static final String REMOTE = "Remote";
-    private static final String LOCAL = "Local";
-    private static final String SYMLINK = "Symlink";
-    private static final String ATTRIBUTES = "Attributes";
-
-    public Path(NSDictionary dict) {
+    protected <T> Path(T dict) {
         this.init(dict);
     }
 
-    public void init(NSDictionary dict) {
-        Object pathObj = dict.objectForKey(REMOTE);
+    public <T> void init(T serialized) {
+        final Deserializer dict = DeserializerFactory.createDeserializer(serialized);
+        String pathObj = dict.stringForKey("Remote");
         if(pathObj != null) {
-            this.setPath(pathObj.toString());
+            this.setPath(pathObj);
         }
-        Object localObj = dict.objectForKey(LOCAL);
+        String localObj = dict.stringForKey("Local");
         if(localObj != null) {
-            this.setLocal(new Local(localObj.toString()));
+            this.setLocal(LocalFactory.createLocal(localObj));
         }
-        Object symlinkObj = dict.objectForKey(SYMLINK);
+        String symlinkObj = dict.stringForKey("Symlink");
         if(symlinkObj != null) {
-            this.setSymbolicLinkPath(symlinkObj.toString());
+            this.setSymlinkTarget(symlinkObj);
         }
-        Object attributesObj = dict.objectForKey(ATTRIBUTES);
+        final Object attributesObj = dict.objectForKey("Attributes");
         if(attributesObj != null) {
-            this.attributes = new PathAttributes((NSDictionary) attributesObj);
+            this.attributes = new PathAttributes(attributesObj);
+        }
+        if(dict.stringForKey("Complete") != null) {
+            this.getStatus().setComplete(true);
+        }
+        if(dict.stringForKey("Skipped") != null) {
+            this.getStatus().setSkipped(true);
         }
     }
 
-    public NSDictionary getAsDictionary() {
-        NSMutableDictionary dict = new NSMutableDictionary();
-        dict.setObjectForKey(this.getAbsolute(), REMOTE);
+    public <S> S getAsDictionary() {
+        final Serializer dict = SerializerFactory.createSerializer();
+        dict.setStringForKey(this.getAbsolute(), "Remote");
         if(local != null) {
-            dict.setObjectForKey(local.toString(), LOCAL);
+            dict.setStringForKey(local.toString(), "Local");
         }
-        if(StringUtils.isNotBlank(this.getSymbolicLinkPath())) {
-            dict.setObjectForKey(this.getSymbolicLinkPath(), SYMLINK);
+        if(StringUtils.isNotBlank(this.getSymlinkTarget())) {
+            dict.setStringForKey(this.getSymlinkTarget(), "Symlink");
         }
-        dict.setObjectForKey(((PathAttributes) this.attributes).getAsDictionary(), ATTRIBUTES);
-        return dict;
+        dict.setObjectForKey((PathAttributes) attributes, "Attributes");
+        if(this.getStatus().isComplete()) {
+            dict.setStringForKey(String.valueOf(true), "Complete");
+        }
+        if(this.getStatus().isSkipped()) {
+            dict.setStringForKey(String.valueOf(true), "Skipped");
+        }
+        return dict.<S>getSerialized();
     }
 
     {
@@ -204,7 +218,8 @@ public abstract class Path extends AbstractPath implements Serializable {
      */
     private Path parent;
 
-    public AbstractPath getParent() {
+    @Override
+    public Path getParent() {
         return this.getParent(true);
     }
 
@@ -212,7 +227,7 @@ public abstract class Path extends AbstractPath implements Serializable {
      * @param create Create if not cached. Otherwise may return null
      * @return My parent directory
      */
-    public AbstractPath getParent(final boolean create) {
+    public Path getParent(final boolean create) {
         if(null == parent) {
             if(create) {
                 if(this.isRoot()) {
@@ -252,6 +267,7 @@ public abstract class Path extends AbstractPath implements Serializable {
      *
      * @return
      */
+    @Override
     public Cache<Path> cache() {
         return this.getSession().cache();
     }
@@ -288,6 +304,7 @@ public abstract class Path extends AbstractPath implements Serializable {
     /**
      * @return the path relative to its parent directory
      */
+    @Override
     public String getName() {
         if(this.isRoot()) {
             return DELIMITER;
@@ -300,8 +317,30 @@ public abstract class Path extends AbstractPath implements Serializable {
     /**
      * @return the absolute path name, e.g. /home/user/filename
      */
+    @Override
     public String getAbsolute() {
         return this.path;
+    }
+
+    /**
+     * Default implementation returning a reference to self. You can override this
+     * if you need a different strategy to compare hashcode and equality for caching
+     * in a model.
+     *
+     * @return
+     */
+    @Override
+    public <T> PathReference<T> getReference() {
+        if(null == reference) {
+            reference = new OutlinePathReference(this.getAbsolute());
+//            reference = new PathReference() {
+//                @Override
+//                public Object unique() {
+//                    return Path.this;
+//                }
+//            };
+        }
+        return reference;
     }
 
     /**
@@ -312,7 +351,7 @@ public abstract class Path extends AbstractPath implements Serializable {
     public void setLocal(Local file) {
         if(null != file) {
             if(file.attributes.isSymbolicLink()) {
-                if(null != file.getSymbolicLinkPath()) {
+                if(null != file.getSymlinkTarget()) {
                     /**
                      * A canonical pathname is both absolute and unique.  The precise
                      * definition of canonical form is system-dependent.  This method first
@@ -322,7 +361,7 @@ public abstract class Path extends AbstractPath implements Serializable {
                      * such as <tt>"."</tt> and <tt>".."</tt> from the pathname, resolving
                      * symbolic links
                      */
-                    this.local = new Local(file.getSymbolicLinkPath());
+                    this.local = LocalFactory.createLocal(file.getSymlinkTarget());
                     return;
                 }
             }
@@ -341,7 +380,7 @@ public abstract class Path extends AbstractPath implements Serializable {
     }
 
     private Local getDefaultLocal() {
-        return new Local(this.getHost().getDownloadFolder(), this.getName());
+        return LocalFactory.createLocal(this.getHost().getDownloadFolder(), this.getName());
     }
 
     /**
@@ -350,19 +389,19 @@ public abstract class Path extends AbstractPath implements Serializable {
     public String kind() {
         if(this.attributes.isSymbolicLink()) {
             if(this.attributes.isFile()) {
-                return NSBundle.localizedString("Symbolic Link (File)", "");
+                return Locale.localizedString("Symbolic Link (File)");
             }
             if(this.attributes.isDirectory()) {
-                return NSBundle.localizedString("Symbolic Link (Folder)", "");
+                return Locale.localizedString("Symbolic Link (Folder)");
             }
         }
         if(this.attributes.isFile()) {
             return this.getLocal().kind();
         }
         if(this.attributes.isDirectory()) {
-            return NSBundle.localizedString("Folder", "");
+            return Locale.localizedString("Folder");
         }
-        return NSBundle.localizedString("Unknown", "");
+        return Locale.localizedString("Unknown");
     }
 
     /**
@@ -430,7 +469,6 @@ public abstract class Path extends AbstractPath implements Serializable {
 
     public void upload(BandwidthThrottle throttle, StreamListener listener, Permission p) {
         this.upload(throttle, listener, p, false);
-        this.getParent().invalidate();
     }
 
     /**
@@ -458,7 +496,7 @@ public abstract class Path extends AbstractPath implements Serializable {
         if(log.isDebugEnabled()) {
             log.debug("upload(" + out.toString() + ", " + in.toString());
         }
-        this.getSession().message(MessageFormat.format(NSBundle.localizedString("Uploading {0}", "Status", ""),
+        this.getSession().message(MessageFormat.format(Locale.localizedString("Uploading {0}", "Status"),
                 this.getName()));
 
         if(getStatus().isResume()) {
@@ -484,7 +522,7 @@ public abstract class Path extends AbstractPath implements Serializable {
         if(log.isDebugEnabled()) {
             log.debug("download(" + in.toString() + ", " + out.toString());
         }
-        this.getSession().message(MessageFormat.format(NSBundle.localizedString("Downloading {0}", "Status", ""),
+        this.getSession().message(MessageFormat.format(Locale.localizedString("Downloading {0}", "Status"),
                 this.getName()));
 
         // Only update the file custom icon if the size is > 5MB. Otherwise creating too much
@@ -557,8 +595,9 @@ public abstract class Path extends AbstractPath implements Serializable {
         out.flush();
     }
 
+    @Override
     public void copy(final AbstractPath copy) {
-        final Local local = new Local(NSPathUtilities.temporaryDirectory(),
+        final Local local = LocalFactory.createLocal(Preferences.instance().getProperty("tmp.dir"),
                 copy.getName());
         TransferOptions options = new TransferOptions();
         options.closeSession = false;
@@ -570,8 +609,8 @@ public abstract class Path extends AbstractPath implements Serializable {
                     return TransferAction.ACTION_OVERWRITE;
                 }
             }, options);
-            ((Path)copy).setLocal(local);
-            UploadTransfer upload = new UploadTransfer(((Path)copy));
+            ((Path) copy).setLocal(local);
+            UploadTransfer upload = new UploadTransfer(((Path) copy));
             upload.start(new TransferPrompt() {
                 public TransferAction prompt() {
                     return TransferAction.ACTION_OVERWRITE;
@@ -586,6 +625,7 @@ public abstract class Path extends AbstractPath implements Serializable {
     /**
      * @return true if the path exists (or is cached!)
      */
+    @Override
     public boolean exists() {
         if(this.isRoot()) {
             return true;
@@ -597,6 +637,7 @@ public abstract class Path extends AbstractPath implements Serializable {
      * @return The hashcode of #getAbsolute()
      * @see #getAbsolute()
      */
+    @Override
     public int hashCode() {
         return this.getAbsolute().hashCode();
     }
@@ -605,6 +646,7 @@ public abstract class Path extends AbstractPath implements Serializable {
      * @param other
      * @return true if the other path has the same absolute path name
      */
+    @Override
     public boolean equals(Object other) {
         if(null == other) {
             return false;
@@ -613,12 +655,13 @@ public abstract class Path extends AbstractPath implements Serializable {
             //BUG: returns the wrong result on case-insensitive systems, e.g. NT!
             return this.getAbsolute().equals(((Path) other).getAbsolute());
         }
-        return false;
+        return this.getAbsolute().equals(other.toString());
     }
 
     /**
      * @return The absolute path name
      */
+    @Override
     public String toString() {
         return this.getAbsolute();
     }
@@ -648,6 +691,7 @@ public abstract class Path extends AbstractPath implements Serializable {
     /**
      * @return Null if there is a encoding failure
      */
+    @Override
     public String toURL() {
         // Do not use java.net.URL because it doesn't know about custom protocols!
         return this.getHost().toURL() + this.encode(this.getAbsolute());

@@ -18,8 +18,6 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-
 import org.apache.log4j.Logger;
 
 import java.security.cert.CertificateEncodingException;
@@ -28,39 +26,36 @@ import java.security.cert.X509Certificate;
 /**
  * @version $Id$
  */
-public class Keychain {
+public class Keychain extends AbstractKeychain {
     private static Logger log = Logger.getLogger(Keychain.class);
 
-    private static Keychain instance;
+    public static void register() {
+        KeychainFactory.addFactory(Factory.NATIVE_PLATFORM, new Factory());
+    }
+
+    private static class Factory extends KeychainFactory {
+        @Override
+        protected AbstractKeychain create() {
+            return new Keychain();
+        }
+    }
 
     private Keychain() {
-        //
+        ;
     }
 
-    private static final Object lock = new Object();
+    private static boolean JNI_LOADED = false;
 
-    public static Keychain instance() {
-        synchronized(lock) {
-            if(null == instance) {
-                instance = new Keychain();
-            }
-            return instance;
+    /**
+     * Load native library extensions
+     *
+     * @return
+     */
+    private static boolean loadNative() {
+        if(!JNI_LOADED) {
+            JNI_LOADED = Native.load("Keychain");
         }
-    }
-
-    static {
-        // Ensure native keychain library is loaded
-        try {
-            NSBundle bundle = NSBundle.mainBundle();
-            String lib = bundle.resourcePath() + "/Java/" + "libKeychain.dylib";
-            log.info("Locating libKeychain.dylib at '" + lib + "'");
-            System.load(lib);
-            log.info("libKeychain.dylib loaded");
-        }
-        catch(UnsatisfiedLinkError e) {
-            log.error("Could not load the libKeychain.dylib library:" + e.getMessage());
-            throw e;
-        }
+        return JNI_LOADED;
     }
 
     /**
@@ -111,11 +106,47 @@ public class Keychain {
         return encoded;
     }
 
+    @Override
+    public String getPassword(String protocol, int port, String serviceName, String user) {
+        if(!loadNative()) {
+            return null;
+        }
+        return this.getInternetPasswordFromKeychain(protocol, port, serviceName, user);
+    }
+
+    @Override
+    public String getPassword(String serviceName, String user) {
+        if(!loadNative()) {
+            return null;
+        }
+        return this.getPasswordFromKeychain(serviceName, user);
+    }
+
+    @Override
+    public void addPassword(String serviceName, String user, String password) {
+        if(!loadNative()) {
+            return;
+        }
+        this.addPasswordToKeychain(serviceName, user, password);
+    }
+
+    @Override
+    public void addPassword(String protocol, int port, String serviceName, String user, String password) {
+        if(!loadNative()) {
+            return;
+        }
+        this.addInternetPasswordToKeychain(protocol, port, serviceName, user, password);
+    }
+
     /**
      * @param certs
      * @return
      */
+    @Override
     public synchronized boolean isTrusted(String hostname, X509Certificate[] certs) {
+        if(!loadNative()) {
+            return false;
+        }
         return this.isTrusted(hostname, this.getEncoded(certs));
     }
 
@@ -129,7 +160,11 @@ public class Keychain {
      * @param certificates
      * @return
      */
+    @Override
     public synchronized boolean displayCertificates(X509Certificate[] certificates) {
+        if(!loadNative()) {
+            return false;
+        }
         return this.displayCertificates(this.getEncoded(certificates));
     }
 

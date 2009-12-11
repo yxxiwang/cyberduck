@@ -18,22 +18,38 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.*;
-import com.apple.cocoa.foundation.*;
-
 import ch.cyberduck.core.*;
+import ch.cyberduck.core.serializer.HostReaderFactory;
+import ch.cyberduck.core.serializer.HostWriterFactory;
+import ch.cyberduck.core.threading.DefaultMainAction;
+import ch.cyberduck.ui.cocoa.application.*;
+import ch.cyberduck.ui.cocoa.application.NSImage;
+import ch.cyberduck.ui.cocoa.foundation.NSArray;
+import ch.cyberduck.ui.cocoa.foundation.NSDictionary;
+import ch.cyberduck.ui.cocoa.foundation.*;
+import ch.cyberduck.ui.cocoa.foundation.NSMutableArray;
+import ch.cyberduck.ui.cocoa.foundation.NSMutableDictionary;
+import ch.cyberduck.ui.cocoa.foundation.NSString;
+import ch.cyberduck.ui.cocoa.foundation.NSURL;
 
-import org.apache.log4j.Logger;
+import org.apache.commons.lang.CharUtils;
 import org.apache.commons.lang.StringUtils;
+import org.apache.log4j.Logger;
+import org.rococoa.Rococoa;
+import org.rococoa.cocoa.foundation.NSInteger;
+import org.rococoa.cocoa.foundation.NSPoint;
+import org.rococoa.cocoa.foundation.NSRect;
+import org.rococoa.cocoa.foundation.NSSize;
+import org.rococoa.cocoa.foundation.NSUInteger;
 
-import java.io.IOException;
-import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @version $Id$
  */
-public class CDBookmarkTableDataSource extends CDController {
+public class CDBookmarkTableDataSource extends CDListDataSource {
     private static Logger log = Logger.getLogger(CDBookmarkTableDataSource.class);
 
     public static final String ICON_COLUMN = "ICON";
@@ -46,14 +62,55 @@ public class CDBookmarkTableDataSource extends CDController {
 
     public CDBookmarkTableDataSource(CDBrowserController controller, BookmarkCollection source) {
         this.controller = controller;
-        this.source = source;
+        this.setSource(source);
     }
 
-    private BookmarkCollection source;
+    private BookmarkCollection source = BookmarkCollection.empty();
+
+    private CollectionListener<Host> listener;
 
     public void setSource(final BookmarkCollection source) {
+        this.source.removeListener(listener); //Remove previous listener
         this.source = source;
+        this.source.addListener(listener = new CollectionListener<Host>() {
+            private ScheduledFuture<?> delayed = null;
+
+            public void collectionItemAdded(Host item) {
+                cache.clear();
+                controller.reloadBookmarks();
+            }
+
+            public void collectionItemRemoved(Host item) {
+                cache.clear();
+                controller.reloadBookmarks();
+            }
+
+            public void collectionItemChanged(Host item) {
+                cache.clear();
+                controller.reloadBookmarks();
+                if(null != delayed) {
+                    delayed.cancel(false);
+                }
+                // Delay to 1 second. When typing changes we don't have to save every iteration.
+                delayed = getTimerPool().schedule(new Runnable() {
+                    public void run() {
+                        controller.invoke(new DefaultMainAction() {
+                            public void run() {
+                                source.save();
+                            }
+                        });
+                    }
+                }, 1, TimeUnit.SECONDS);
+            }
+        });
         this.setFilter(null);
+    }
+
+    @Override
+    protected void invalidate() {
+        cache.clear();
+        source.removeListener(listener);
+        super.invalidate();
     }
 
     private HostFilter filter;
@@ -84,25 +141,37 @@ public class CDBookmarkTableDataSource extends CDController {
         }
         if(null == filtered) {
             filtered = new BookmarkCollection() {
+                @Override
                 public boolean allowsAdd() {
                     return source.allowsAdd();
                 }
 
+                @Override
                 public boolean allowsDelete() {
                     return source.allowsDelete();
                 }
 
+                @Override
                 public boolean allowsEdit() {
                     return source.allowsEdit();
                 }
+
+                @Override
+                public void save() {
+                    source.save();
+                }
+
+                @Override
+                public void load() {
+                    source.load();
+                }
             };
-            for(Iterator<Host> i = source.iterator(); i.hasNext();) {
-                final Host bookmark = i.next();
+            for(final Host bookmark : source) {
                 if(filter.accept(bookmark)) {
                     filtered.add(bookmark);
                 }
             }
-            filtered.addListener(new AbstractCollectionListener<Host>() {
+            filtered.addListener(new CollectionListener<Host>() {
                 public void collectionItemAdded(Host item) {
                     source.add(item);
                 }
@@ -110,160 +179,163 @@ public class CDBookmarkTableDataSource extends CDController {
                 public void collectionItemRemoved(Host item) {
                     source.remove(item);
                 }
+
+                public void collectionItemChanged(Host item) {
+                    source.collectionItemChanged(item);
+                }
             });
         }
         return filtered;
     }
 
-    /**
-     * @see NSTableView.DataSource
-     */
-    public int numberOfRowsInTableView(NSTableView view) {
-        return this.getSource().size();
+    public NSInteger numberOfRowsInTableView(NSTableView view) {
+        return new NSInteger(this.getSource().size());
     }
 
     /**
-     * @see NSTableView.DataSource
+     * Second cache because it is expensive to create proxy instances
      */
-    public Object tableViewObjectValueForLocation(NSTableView view, NSTableColumn tableColumn, int row) {
-        if(row < this.numberOfRowsInTableView(view)) {
-            final String identifier = (String) tableColumn.identifier();
-            final Host host = this.getSource().get(row);
+    private AttributeCache<Host> cache = new AttributeCache<Host>(
+            Preferences.instance().getInteger("bookmark.model.cache.size")
+    );
+
+    public NSObject tableView_objectValueForTableColumn_row(NSTableView view, NSTableColumn tableColumn, NSInteger row) {
+        final String identifier = tableColumn.identifier();
+        final Host host = this.getSource().get(row.intValue());
+        final NSObject cached = cache.get(host, identifier);
+        if(null == cached) {
             if(identifier.equals(ICON_COLUMN)) {
-                return CDIconCache.instance().iconForName(host.getProtocol().disk(),
+                return CDIconCache.iconNamed(host.getProtocol().disk(),
                         Preferences.instance().getInteger("bookmark.icon.size"));
             }
             if(identifier.equals(BOOKMARK_COLUMN)) {
-                return host;
+                NSMutableDictionary dict = NSMutableDictionary.dictionaryWithDictionary(host.<NSDictionary>getAsDictionary());
+                dict.setObjectForKey(host.toURL() + Path.normalize(host.getDefaultPath()), "URL");
+                if(StringUtils.isNotBlank(host.getComment())) {
+                    dict.setObjectForKey(StringUtils.remove(StringUtils.remove(host.getComment(), CharUtils.LF), CharUtils.CR), "Comment");
+                }
+                return cache.put(host, identifier, dict);
             }
             if(identifier.equals(STATUS_COLUMN)) {
                 if(controller.hasSession()) {
                     final Session session = controller.getSession();
                     if(host.equals(session.getHost())) {
                         if(session.isConnected()) {
-                            return NSImage.imageNamed("statusGreen.tiff");
+                            return CDIconCache.iconNamed("statusGreen.tiff", 16);
                         }
                         if(session.isOpening()) {
-                            return NSImage.imageNamed("statusYellow.tiff");
+                            return CDIconCache.iconNamed("statusYellow.tiff", 16);
                         }
                     }
                 }
                 return null;
             }
             if(identifier.equals(TYPEAHEAD_COLUMN)) {
-                return host.getNickname();
+                return cache.put(host, identifier, NSString.stringWithString(host.getNickname()));
             }
             throw new IllegalArgumentException("Unknown identifier: " + identifier);
         }
-        log.warn("tableViewObjectValueForLocation:" + row + " == null");
-        return null;
+        return cached;
     }
 
-    /**
-     * @see NSTableView.DataSource
-     */
-    public int tableViewValidateDrop(NSTableView view, NSDraggingInfo info, int index, int operation) {
+    @Override
+    public NSUInteger tableView_validateDrop_proposedRow_proposedDropOperation(NSTableView view, NSDraggingInfo draggingInfo, NSInteger index, NSUInteger operation) {
+        NSPasteboard draggingPasteboard = draggingInfo.draggingPasteboard();
         if(!this.getSource().allowsEdit()) {
             // Do not allow drags for non writable collections
-            return NSDraggingInfo.DragOperationNone;
+            return NSDraggingInfo.NSDragOperationNone;
         }
-        if(info.draggingPasteboard().availableTypeFromArray(new NSArray(NSPasteboard.StringPboardType)) != null) {
-            Object o = info.draggingPasteboard().stringForType(NSPasteboard.StringPboardType);
+        if(draggingPasteboard.availableTypeFromArray(NSArray.arrayWithObject(NSPasteboard.StringPboardType)) != null) {
+            String o = draggingPasteboard.stringForType(NSPasteboard.StringPboardType);
             if(o != null) {
-                if(Protocol.isURL(o.toString())) {
-                    view.setDropRowAndDropOperation(index, NSTableView.DropAbove);
-                    return NSDraggingInfo.DragOperationCopy;
+                if(Protocol.isURL(o)) {
+                    view.setDropRow(index, NSTableView.NSTableViewDropAbove);
+                    return NSDraggingInfo.NSDragOperationCopy;
                 }
             }
-            return NSDraggingInfo.DragOperationNone;
+            return NSDraggingInfo.NSDragOperationNone;
         }
-        if(info.draggingPasteboard().availableTypeFromArray(new NSArray(NSPasteboard.FilenamesPboardType)) != null) {
-            Object o = info.draggingPasteboard().propertyListForType(NSPasteboard.FilenamesPboardType);
+        if(draggingPasteboard.availableTypeFromArray(NSArray.arrayWithObject(NSPasteboard.FilenamesPboardType)) != null) {
+            NSObject o = draggingPasteboard.propertyListForType(NSPasteboard.FilenamesPboardType);
             if(o != null) {
-                NSArray elements = (NSArray) o;
-                for(int i = 0; i < elements.count(); i++) {
-                    String file = (String) elements.objectAtIndex(i);
-                    if(file.indexOf(".duck") != -1) {
+                NSArray elements = Rococoa.cast(o, NSArray.class);
+                for(int i = 0; i < elements.count().intValue(); i++) {
+                    String file = elements.objectAtIndex(new NSUInteger(i)).toString();
+                    if(file.contains(".duck")) {
                         //allow file drags if bookmark file even if list is empty
-                        return NSDraggingInfo.DragOperationCopy;
+                        return NSDraggingInfo.NSDragOperationCopy;
                     }
                 }
-                if(index > -1 && index < view.numberOfRows()) {
+                if(index.intValue() > -1 && index.intValue() < view.numberOfRows().intValue()) {
                     //only allow other files if there is at least one bookmark
-                    view.setDropRowAndDropOperation(index, NSTableView.DropOn);
-                    return NSDraggingInfo.DragOperationCopy;
+                    view.setDropRow(index, NSTableView.NSTableViewDropOn);
+                    return NSDraggingInfo.NSDragOperationCopy;
                 }
             }
         }
-        if(info.draggingPasteboard().availableTypeFromArray(new NSArray(NSPasteboard.URLPboardType)) != null) {
-            Object o = info.draggingPasteboard().propertyListForType(NSPasteboard.URLPboardType);
+        if(draggingPasteboard.availableTypeFromArray(NSArray.arrayWithObject(NSPasteboard.URLPboardType)) != null) {
+            NSObject o = draggingPasteboard.propertyListForType(NSPasteboard.URLPboardType);
             if(o != null) {
-                NSArray elements = (NSArray) o;
-                for(int i = 0; i < elements.count(); i++) {
-                    if(Protocol.isURL(elements.objectAtIndex(i).toString())) {
-                        view.setDropRowAndDropOperation(index, NSTableView.DropAbove);
-                        return NSDraggingInfo.DragOperationCopy;
+                NSArray elements = Rococoa.cast(o, NSArray.class);
+                for(int i = 0; i < elements.count().intValue(); i++) {
+                    if(Protocol.isURL(elements.objectAtIndex(new NSUInteger(i)).toString())) {
+                        view.setDropRow(index, NSTableView.NSTableViewDropAbove);
+                        return NSDraggingInfo.NSDragOperationCopy;
                     }
                 }
             }
-            return NSDraggingInfo.DragOperationNone;
+            return NSDraggingInfo.NSDragOperationNone;
         }
-        if(info.draggingPasteboard().availableTypeFromArray(new NSArray(NSPasteboard.FilesPromisePboardType)) != null) {
-            if(index > -1 && index < view.numberOfRows()) {
-                view.setDropRowAndDropOperation(index, NSTableView.DropAbove);
+        if(!HostPasteboard.getPasteboard().isEmpty()) {
+            if(index.intValue() > -1 && index.intValue() < view.numberOfRows().intValue()) {
+                view.setDropRow(index, NSTableView.NSTableViewDropAbove);
                 // We accept any file promise within the bounds
-                return NSDraggingInfo.DragOperationMove;
+                return NSDraggingInfo.NSDragOperationMove;
             }
         }
-        return NSDraggingInfo.DragOperationNone;
+        return NSDraggingInfo.NSDragOperationNone;
     }
 
     /**
-     * @param info contains details on this dragging operation.
-     * @param row  The proposed location is row and action is operation.
-     *             The data source should incorporate the data from the dragging pasteboard at this time.
+     * @param draggingInfo contains details on this dragging operation.
+     * @param row          The proposed location is row and action is operation.
+     *                     The data source should incorporate the data from the dragging pasteboard at this time.
      * @see NSTableView.DataSource
      *      Invoked by view when the mouse button is released over a table view that previously decided to allow a drop.
      */
-    public boolean tableViewAcceptDrop(NSTableView view, NSDraggingInfo info, int row, int operation) {
+    @Override
+    public boolean tableView_acceptDrop_row_dropOperation(NSTableView view, NSDraggingInfo draggingInfo, NSInteger row, NSUInteger operation) {
+        NSPasteboard draggingPasteboard = draggingInfo.draggingPasteboard();
         log.debug("tableViewAcceptDrop:" + row);
         final BookmarkCollection source = this.getSource();
-        if(info.draggingPasteboard().availableTypeFromArray(
-                new NSArray(NSPasteboard.FilenamesPboardType)) != null) {
+        if(draggingPasteboard.availableTypeFromArray(NSArray.arrayWithObject(NSPasteboard.FilenamesPboardType)) != null) {
             // We get a drag from another application e.g. Finder.app proposing some files
-            NSArray filesList = (NSArray) info.draggingPasteboard().propertyListForType(
-                    NSPasteboard.FilenamesPboardType);// get the filenames from pasteboard
+            NSArray filesList = Rococoa.cast(draggingPasteboard.propertyListForType(NSPasteboard.FilenamesPboardType), NSArray.class);// get the filenames from pasteboard
             // If regular files are dropped, these will be uploaded to the dropped bookmark location
             final List<Path> roots = new Collection<Path>();
             Session session = null;
-            for(int i = 0; i < filesList.count(); i++) {
-                String filename = (String) filesList.objectAtIndex(i);
+            for(int i = 0; i < filesList.count().intValue(); i++) {
+                String filename = filesList.objectAtIndex(new NSUInteger(i)).toString();
                 if(filename.endsWith(".duck")) {
                     // Adding a previously exported bookmark file from the Finder
-                    if(row < 0) {
-                        row = 0;
+                    if(row.intValue() < 0) {
+                        row = new NSInteger(0);
                     }
-                    if(row > view.numberOfRows()) {
-                        row = view.numberOfRows();
+                    if(row.intValue() > view.numberOfRows().intValue()) {
+                        row = new NSInteger(view.numberOfRows().intValue());
                     }
-                    try {
-                        source.add(row, new Host(new Local(filename)));
-                        view.selectRow(row, false);
-                        view.scrollRowToVisible(row);
-                    }
-                    catch(IOException e) {
-                        log.error(e.getMessage());
-                        return false;
-                    }
+                    source.add(row.intValue(), HostReaderFactory.instance().read(LocalFactory.createLocal(filename)));
+                    view.selectRowIndexes(NSIndexSet.indexSetWithIndex(row), false);
+                    view.scrollRowToVisible(row);
                 }
                 else {
                     // The bookmark this file has been dropped onto
-                    Host h = source.get(row);
+                    Host h = source.get(row.intValue());
                     if(null == session) {
                         session = SessionFactory.createSession(h);
                     }
                     // Upload to the remote host this bookmark points to
-                    roots.add(PathFactory.createPath(session, h.getDefaultPath(), new Local(filename)));
+                    roots.add(PathFactory.createPath(session, h.getDefaultPath(), LocalFactory.createLocal(filename)));
                 }
             }
             if(!roots.isEmpty()) {
@@ -275,16 +347,16 @@ public class CDBookmarkTableDataSource extends CDController {
             }
             return true;
         }
-        if(info.draggingPasteboard().availableTypeFromArray(new NSArray(NSPasteboard.URLPboardType)) != null) {
-            Object o = info.draggingPasteboard().propertyListForType(NSPasteboard.URLPboardType);
+        if(draggingPasteboard.availableTypeFromArray(NSArray.arrayWithObject(NSPasteboard.URLPboardType)) != null) {
+            NSObject o = draggingPasteboard.propertyListForType(NSPasteboard.URLPboardType);
             if(o != null) {
-                NSArray elements = (NSArray) o;
-                for(int i = 0; i < elements.count(); i++) {
-                    final String url = elements.objectAtIndex(i).toString();
+                NSArray elements = Rococoa.cast(o, NSArray.class);
+                for(int i = 0; i < elements.count().intValue(); i++) {
+                    final String url = elements.objectAtIndex(new NSUInteger(i)).toString();
                     if(StringUtils.isNotBlank(url)) {
                         final Host h = Host.parse(url);
-                        source.add(row, h);
-                        view.selectRow(row, false);
+                        source.add(row.intValue(), h);
+                        view.selectRowIndexes(NSIndexSet.indexSetWithIndex(row), false);
                         view.scrollRowToVisible(row);
                     }
                 }
@@ -292,23 +364,22 @@ public class CDBookmarkTableDataSource extends CDController {
             }
             return false;
         }
-        if(info.draggingPasteboard().availableTypeFromArray(new NSArray(NSPasteboard.StringPboardType)) != null) {
-            Object o = info.draggingPasteboard().stringForType(NSPasteboard.StringPboardType);
+        if(draggingPasteboard.availableTypeFromArray(NSArray.arrayWithObject(NSPasteboard.StringPboardType)) != null) {
+            String o = draggingPasteboard.stringForType(NSPasteboard.StringPboardType);
             if(o != null) {
-                final Host h = Host.parse(o.toString());
-                source.add(row, h);
-                view.selectRow(row, false);
+                final Host h = Host.parse(o);
+                source.add(row.intValue(), h);
+                view.selectRowIndexes(NSIndexSet.indexSetWithIndex(row), false);
                 view.scrollRowToVisible(row);
                 return true;
             }
             return false;
         }
-        if(info.draggingPasteboard().availableTypeFromArray(
-                new NSArray(NSPasteboard.FilesPromisePboardType)) != null && promisedDragBookmarks != null) {
-            for(int i = 0; i < promisedDragBookmarks.length; i++) {
-                source.remove(source.indexOf(promisedDragBookmarks[i]));
-                source.add(row, promisedDragBookmarks[i]);
-                view.selectRow(row, false);
+        if(!HostPasteboard.getPasteboard().isEmpty()) {
+            for(Host promisedDragBookmark : HostPasteboard.getPasteboard()) {
+                source.remove(source.indexOf(promisedDragBookmark));
+                source.add(row.intValue(), promisedDragBookmark);
+                view.selectRowIndexes(NSIndexSet.indexSetWithIndex(row), false);
                 view.scrollRowToVisible(row);
             }
             return true;
@@ -320,13 +391,13 @@ public class CDBookmarkTableDataSource extends CDController {
      * @see NSDraggingSource
      * @see "http://www.cocoabuilder.com/archive/message/2005/10/5/118857"
      */
-    public void finishedDraggingImage(NSImage image, NSPoint point, int operation) {
-        log.debug("finishedDraggingImage:" + operation);
-        if(NSDraggingInfo.DragOperationDelete == operation) {
+    @Override
+    public void draggedImage_endedAt_operation(NSImage image, NSPoint point, NSUInteger operation) {
+        if(NSDraggingInfo.NSDragOperationDelete.intValue() == operation.intValue()) {
             controller.deleteBookmarkButtonClicked(null);
         }
-        NSPasteboard.pasteboardWithName(NSPasteboard.DragPboard).declareTypes(null, null);
-        promisedDragBookmarks = null;
+        NSPasteboard.pasteboardWithName(NSPasteboard.DragPboard).declareTypes_owner(null, null);
+        HostPasteboard.getPasteboard().clear();
     }
 
     /**
@@ -334,21 +405,17 @@ public class CDBookmarkTableDataSource extends CDController {
      * @return
      * @see NSDraggingSource
      */
-    public int draggingSourceOperationMaskForLocal(boolean local) {
+    @Override
+    public NSUInteger draggingSourceOperationMaskForLocal(boolean local) {
         log.debug("draggingSourceOperationMaskForLocal:" + local);
         if(local) {
-            return NSDraggingInfo.DragOperationMove | NSDraggingInfo.DragOperationCopy;
+            return new NSUInteger(NSDraggingInfo.NSDragOperationMove.intValue() | NSDraggingInfo.NSDragOperationCopy.intValue());
         }
-        return NSDraggingInfo.DragOperationCopy | NSDraggingInfo.DragOperationDelete;
+        return new NSUInteger(NSDraggingInfo.NSDragOperationCopy.intValue() | NSDraggingInfo.NSDragOperationDelete.intValue());
     }
 
     /**
-     * The files dragged from the favorits drawer to the Finder --> bookmark files
-     */
-    private Host[] promisedDragBookmarks;
-
-    /**
-     * @param rows is the list of row numbers that will be participating in the drag.
+     * @param rowIndexes is the list of row numbers that will be participating in the drag.
      * @return To refuse the drag, return false. To start a drag, return true and place
      *         the drag data onto pboard (data, owner, and so on).
      * @see NSTableView.DataSource
@@ -356,22 +423,18 @@ public class CDBookmarkTableDataSource extends CDController {
      *      The drag image and other drag-related information will be set up and provided by the table view once this call
      *      returns with true.
      */
-    public boolean tableViewWriteRowsToPasteboard(NSTableView view, NSArray rows, NSPasteboard pboard) {
-        log.debug("tableViewWriteRowsToPasteboard:" + rows);
-        if(rows.count() > 0) {
-            this.promisedDragBookmarks = new Host[rows.count()];
-            for(int i = 0; i < rows.count(); i++) {
-                promisedDragBookmarks[i] =
-                        new Host(this.getSource().get(((Number) rows.objectAtIndex(i)).intValue()).getAsDictionary());
-            }
-            NSEvent event = NSApplication.sharedApplication().currentEvent();
-            if(event != null) {
-                NSPoint dragPosition = view.convertPointFromView(event.locationInWindow(), null);
-                NSRect imageRect = new NSRect(new NSPoint(dragPosition.x() - 16, dragPosition.y() - 16), new NSSize(32, 32));
-                // Writing a promised file of the host as a bookmark file to the clipboard
-                view.dragPromisedFilesOfTypes(new NSArray("duck"), imageRect, this, true, event);
-                return true;
-            }
+    @Override
+    public boolean tableView_writeRowsWithIndexes_toPasteboard(NSTableView view, NSIndexSet rowIndexes, NSPasteboard pboard) {
+        for(NSUInteger index = rowIndexes.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = rowIndexes.indexGreaterThanIndex(index)) {
+            HostPasteboard.getPasteboard().add(this.getSource().get(index.intValue()));
+        }
+        NSEvent event = NSApplication.sharedApplication().currentEvent();
+        if(event != null) {
+            NSPoint dragPosition = view.convertPoint_fromView(event.locationInWindow(), null);
+            NSRect imageRect = new NSRect(new NSPoint(dragPosition.x.doubleValue() - 16, dragPosition.y.doubleValue() - 16), new NSSize(32, 32));
+            // Writing a promised file of the host as a bookmark file to the clipboard
+            view.dragPromisedFilesOfTypes(NSArray.arrayWithObject("duck"), imageRect, this.id(), true, event);
+            return true;
         }
         return false;
     }
@@ -385,26 +448,44 @@ public class CDBookmarkTableDataSource extends CDController {
      *         finishedDraggingImage method to avoid blocking the destination application.
      * @see NSTableView.DataSource
      */
-    public NSArray namesOfPromisedFilesDroppedAtDestination(java.net.URL dropDestination) {
+    @Override
+    public NSArray namesOfPromisedFilesDroppedAtDestination(final NSURL dropDestination) {
         log.debug("namesOfPromisedFilesDroppedAtDestination:" + dropDestination);
-        final NSMutableArray promisedDragNames = new NSMutableArray();
-        try {
-            for(int i = 0; i < promisedDragBookmarks.length; i++) {
-                // utf-8 is just a wild guess
-                Local file = new Local(java.net.URLDecoder.decode(dropDestination.getPath(), "utf-8"),
-                        promisedDragBookmarks[i].getNickname() + ".duck");
-                promisedDragBookmarks[i].setFile(file);
-                promisedDragBookmarks[i].write();
+        final NSMutableArray promisedDragNames = NSMutableArray.array();
+        if(null != dropDestination) {
+            final HostPasteboard pasteboard = HostPasteboard.getPasteboard();
+            for(Host promisedDragBookmark : pasteboard) {
+                final Local file = LocalFactory.createLocal(dropDestination.path(), promisedDragBookmark.getNickname() + ".duck");
+                HostWriterFactory.instance().write(promisedDragBookmark, file);
                 // Adding the filename that is promised to be created at the dropDestination
-                promisedDragNames.addObject(file.getName());
+                promisedDragNames.addObject(NSString.stringWithString(file.getName()));
             }
-        }
-        catch(java.io.UnsupportedEncodingException e) {
-            log.error(e.getMessage());
-        }
-        catch(IOException e) {
-            log.error(e.getMessage());
+            pasteboard.clear();
         }
         return promisedDragNames;
     }
+
+//    @Override
+//    public NSArray tableView_namesOfPromisedFilesDroppedAtDestination_forDraggedRowsWithIndexes(NSTableView view,
+//                                                                                                final NSURL dropDestination,
+//                                                                                                NSIndexSet rowIndexes) {
+//        final NSMutableArray promisedDragNames = NSMutableArray.arrayWithCapacity(rowIndexes.count().intValue().intValue());
+//        for(NSUInteger index = rowIndexes.firstIndex(); index.longValue() != NSIndexSet.NSNotFound; index = rowIndexes.indexGreaterThanIndex(index)) {
+//            if(index.intValue() == -1) {
+//                break;
+//            }
+//            final Host host = new Host(this.getSource().get(index.intValue()).getAsDictionary());
+//            Local file = LocalFactory.createLocalLocal(dropDestination.path(), host.getNickname() + ".duck");
+//            host.setFile(file);
+//            try {
+//                host.write();
+//                // Adding the filename that is promised to be created at the dropDestination
+//                promisedDragNames.addObject(NSString.stringWithString(file.getName()));
+//            }
+//            catch(IOException e) {
+//                log.error(e.getMessage());
+//            }
+//        }
+//        return promisedDragNames;
+//    }
 }

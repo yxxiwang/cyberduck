@@ -1,26 +1,23 @@
 package ch.cyberduck.core;
 
 /*
- *  Copyright (c) 2008 David Kocher. All rights reserved.
- *  http://cyberduck.ch/
+ * Copyright (c) 2002-2009 David Kocher. All rights reserved.
  *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
+ * http://cyberduck.ch/
  *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- *  Bug fixes, suggestions and comments should be sent to:
- *  dkocher@cyberduck.ch
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * Bug fixes, suggestions and comments should be sent to:
+ * dkocher@cyberduck.ch
  */
-
-import com.apple.cocoa.application.NSImage;
-
-import java.util.Iterator;
 
 /**
  * @version $Id$
@@ -30,44 +27,72 @@ public class RendezvousCollection extends BookmarkCollection {
     private static RendezvousCollection RENDEZVOUS_COLLECTION
             = new RendezvousCollection();
 
+    private RendezvousCollection() {
+        Rendezvous.instance().addListener(new RendezvousListener() {
+            public void serviceResolved(String servicename, String hostname) {
+                RendezvousCollection.this.collectionItemAdded(null);
+            }
+
+            public void serviceLost(String servicename) {
+                RendezvousCollection.this.collectionItemRemoved(null);
+            }
+        });
+    }
+
     /**
-     *
      * @return
      */
     public static RendezvousCollection defaultCollection() {
         return RENDEZVOUS_COLLECTION;
     }
 
+    @Override
     public Host get(int row) {
         return Rendezvous.instance().getService(row);
     }
 
+    @Override
     public int size() {
         return Rendezvous.instance().numberOfServices();
     }
 
+    @Override
     public Host remove(int row) {
         return null;
     }
 
+    @Override
     public Object[] toArray() {
         Host[] content = new Host[this.size()];
         int i = 0;
-        for(Iterator<Host> iter = this.iterator(); iter.hasNext(); ) {
-            content[i] = iter.next();
+        for(Host host : this) {
+            content[i] = host;
         }
         return content;
     }
 
+    @Override
     public boolean allowsAdd() {
         return false;
     }
 
+    @Override
     public boolean allowsDelete() {
         return false;
     }
 
+    @Override
     public boolean allowsEdit() {
         return false;
+    }
+
+    @Override
+    public void save() {
+        ;
+    }
+
+    @Override
+    public void load() {
+        ;
     }
 }

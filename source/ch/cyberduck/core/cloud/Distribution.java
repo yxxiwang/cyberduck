@@ -18,7 +18,7 @@ package ch.cyberduck.core.cloud;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
+import ch.cyberduck.core.i18n.Locale;
 
 /**
  * @version $Id$
@@ -43,7 +43,6 @@ public class Distribution {
 
     /**
      * @param enabled
-     * @param origin
      * @param url
      * @param status
      */
@@ -52,8 +51,18 @@ public class Distribution {
     }
 
     /**
+     *
+     * @param enabled
+     * @param url
+     * @param status
+     * @param logging
+     */
+    public Distribution(boolean enabled, String url, String status, boolean logging) {
+        this(enabled, false, url, status, new String[]{}, logging);
+    }
+
+    /**
      * @param enabled    Deployment Enabled
-     * @param inprogress Deployment Status is about to be changed
      * @param url        Where to find this distribution
      * @param status     Status Message about Deployment Status
      * @param cnames     Multiple CNAME aliases of this distribution
@@ -121,7 +130,7 @@ public class Distribution {
      */
     public String getStatus() {
         if(null == status) {
-            return NSBundle.localizedString("Unknown", "");
+            return Locale.localizedString("Unknown");
         }
         return status;
     }

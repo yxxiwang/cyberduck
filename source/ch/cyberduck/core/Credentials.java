@@ -18,8 +18,6 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSPathUtilities;
-
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
 
@@ -39,12 +37,12 @@ public class Credentials {
     /**
      * The login password
      */
-    private transient String pass;
+    private transient String password;
 
     /**
      * If not null, use public key authentication if SSH is the protocol
      */
-    private Identity identity;
+    private Local identity;
 
     /**
      * If the credentials should be stored in the Keychain upon successful login
@@ -60,21 +58,21 @@ public class Credentials {
     }
 
     /**
-     * @param user Login with this username
-     * @param pass Passphrase
+     * @param user     Login with this username
+     * @param password Passphrase
      */
-    public Credentials(String user, String pass) {
-        this(user, pass, Preferences.instance().getBoolean("connection.login.useKeychain"));
+    public Credentials(String user, String password) {
+        this(user, password, Preferences.instance().getBoolean("connection.login.useKeychain"));
     }
 
     /**
      * @param user                    Login with this username
-     * @param pass                    Passphrase
+     * @param password                Passphrase
      * @param shouldBeAddedToKeychain if the credential should be added to the keychain uppon successful login
      */
-    public Credentials(String user, String pass, boolean shouldBeAddedToKeychain) {
+    public Credentials(String user, String password, boolean shouldBeAddedToKeychain) {
         this.shouldBeAddedToKeychain = shouldBeAddedToKeychain;
-        this.init(user, pass);
+        this.init(user, password);
     }
 
     /**
@@ -83,7 +81,7 @@ public class Credentials {
      */
     private void init(String username, String password) {
         this.user = username;
-        this.pass = password;
+        this.password = password;
     }
 
     public String getUsername() {
@@ -95,16 +93,16 @@ public class Credentials {
     }
 
     public String getPassword() {
-        if(StringUtils.isEmpty(pass)) {
+        if(StringUtils.isEmpty(password)) {
             if(this.isAnonymousLogin()) {
                 return Preferences.instance().getProperty("connection.login.anon.pass");
             }
         }
-        return pass;
+        return password;
     }
 
     public void setPassword(String pass) {
-        this.pass = pass;
+        this.password = pass;
     }
 
     /**
@@ -154,39 +152,22 @@ public class Credentials {
      *
      * @param file
      */
-    public void setIdentity(Identity file) {
+    public void setIdentity(Local file) {
         this.identity = file;
     }
 
     /**
      * @return The path to the private key file to use for public key authentication
      */
-    public Identity getIdentity() {
+    public Local getIdentity() {
         return identity;
-    }
-
-    /**
-     *
-     */
-    public static class Identity extends Local {
-
-        public Identity(String path) {
-            super(path);
-        }
-
-        public String toString() {
-            return this.toURL();
-        }
-
-        public String toURL() {
-            return NSPathUtilities.stringByAbbreviatingWithTildeInPath(this.getAbsolute());
-        }
     }
 
     /**
      * @return
      */
     public boolean isValid() {
-        return StringUtils.isNotEmpty(this.getUsername()) && StringUtils.isNotEmpty(this.getPassword());
+        return StringUtils.isNotEmpty(this.getUsername())
+                && this.getPassword() != null;
     }
 }

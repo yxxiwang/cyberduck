@@ -19,13 +19,12 @@ package ch.cyberduck.core;
  */
 
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * Facade for com.apple.cocoa.foundation.NSMutableArray
- *
  * @version $Id$
  */
-public class AttributedList<E extends AbstractPath> extends ArrayList<E> {
+public class AttributedList<E extends AbstractPath> extends CopyOnWriteArrayList<E> {
 
     //primary attributes
     protected static final String FILTER = "FILTER";
@@ -57,6 +56,35 @@ public class AttributedList<E extends AbstractPath> extends ArrayList<E> {
         this.addAll(collection);
     }
 
+    private static final AttributedList<AbstractPath> EMPTY_LIST = new EmptyList();
+
+    public static <T extends AbstractPath> AttributedList<T> emptyList() {
+        return (AttributedList<T>) EMPTY_LIST;
+    }
+
+    private static class EmptyList extends AttributedList<AbstractPath> {
+
+        @Override
+        public int size() {
+            return 0;
+        }
+
+        @Override
+        public boolean contains(Object obj) {
+            return false;
+        }
+
+        @Override
+        public AbstractPath get(int index) {
+            throw new IndexOutOfBoundsException("Index: " + index);
+        }
+
+        // Preserves singleton property
+        private Object readResolve() {
+            return EMPTY_LIST;
+        }
+    }
+
     /**
      * Container for file listing attributes, such as a sorting comparator and filter
      *
@@ -84,7 +112,11 @@ public class AttributedList<E extends AbstractPath> extends ArrayList<E> {
         }
 
         public void addHidden(E child) {
-            ((Set) this.get(HIDDEN)).add(child);
+            ((Set<E>) this.get(HIDDEN)).add(child);
+        }
+
+        public Set<E> getHidden() {
+            return (Set<E>) this.get(HIDDEN);
         }
 
         public void setReadable(boolean readable) {
@@ -117,5 +149,32 @@ public class AttributedList<E extends AbstractPath> extends ArrayList<E> {
 
     public Attributes<E> attributes() {
         return attributes;
+    }
+
+    private Map<PathReference, E> references = new HashMap<PathReference, E>();
+
+    @Override
+    public boolean add(E path) {
+        references.put(path.getReference(), path);
+        return super.add(path);
+    }
+
+    @Override
+    public boolean addAll(java.util.Collection<? extends E> c) {
+        for(E item : c) {
+            references.put(item.getReference(), item);
+        }
+        return super.addAll(c);
+    }
+
+    public E get(PathReference reference) {
+        return references.get(reference);
+    }
+
+    @Override
+    public void clear() {
+        attributes.clear();
+        references.clear();
+        super.clear();
     }
 }

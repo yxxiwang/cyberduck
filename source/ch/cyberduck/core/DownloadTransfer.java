@@ -18,23 +18,15 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSWorkspace;
-import com.apple.cocoa.foundation.NSDictionary;
-import com.apple.cocoa.foundation.NSMutableDictionary;
-import com.apple.cocoa.foundation.NSDistributedNotificationCenter;
-import com.apple.cocoa.foundation.NSNotification;
-
 import ch.cyberduck.core.io.BandwidthThrottle;
-import ch.cyberduck.ui.cocoa.CDMainApplication;
-import ch.cyberduck.ui.cocoa.growl.Growl;
-import ch.cyberduck.ui.cocoa.threading.DefaultMainAction;
+import ch.cyberduck.core.serializer.Serializer;
+import ch.cyberduck.ui.growl.Growl;
 
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang.StringUtils;
 
-import java.util.Collections;
-import java.util.List;
 import java.util.Iterator;
+import java.util.List;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -51,11 +43,16 @@ public class DownloadTransfer extends Transfer {
         super(roots);
     }
 
+    public <T> DownloadTransfer(T dict, Session s) {
+        super(dict, s);
+    }
+
+    @Override
     protected void setRoots(List<Path> downloads) {
         final List<Path> normalized = new Collection<Path>();
         for(Path download : downloads) {
             boolean duplicate = false;
-            for(Iterator<Path> iter = normalized.iterator(); iter.hasNext(); ) {
+            for(Iterator<Path> iter = normalized.iterator(); iter.hasNext();) {
                 Path n = iter.next();
                 if(download.isChild(n)) {
                     // The selected file is a child of a directory already included
@@ -74,11 +71,11 @@ public class DownloadTransfer extends Transfer {
                     int no = 0;
                     do {
                         no++;
-                        proposal = FilenameUtils.getBaseName(filename)+ "-" + no;
+                        proposal = FilenameUtils.getBaseName(filename) + "-" + no;
                         if(StringUtils.isNotBlank(FilenameUtils.getExtension(filename))) {
                             proposal += "." + FilenameUtils.getExtension(filename);
                         }
-                        download.setLocal(new Local(parent, proposal));
+                        download.setLocal(LocalFactory.createLocal(parent, proposal));
                     }
                     while(download.getLocal().exists());
                     log.info("Changed local name to:" + download.getName());
@@ -93,16 +90,17 @@ public class DownloadTransfer extends Transfer {
         super.setRoots(normalized);
     }
 
-    public DownloadTransfer(NSDictionary dict, Session s) {
-        super(dict, s);
+    @Override
+    public <T> T getAsDictionary() {
+        final Serializer dict = super.getSerializer();
+        dict.setStringForKey(String.valueOf(KIND_DOWNLOAD), "Kind");
+        return dict.<T>getSerialized();
     }
 
-    public NSMutableDictionary getAsDictionary() {
-        NSMutableDictionary dict = super.getAsDictionary();
-        dict.setObjectForKey(String.valueOf(TransferFactory.KIND_DOWNLOAD), "Kind");
-        return dict;
-    }
-
+    /**
+     * Set download bandwidth
+     */
+    @Override
     protected void init() {
         log.debug("init");
         this.bandwidth = new BandwidthThrottle(
@@ -113,6 +111,7 @@ public class DownloadTransfer extends Transfer {
      *
      */
     private abstract class DownloadTransferFilter extends TransferFilter {
+        @Override
         public void prepare(Path p) {
             if(p.attributes.getSize() == -1) {
                 p.readSize();
@@ -130,8 +129,8 @@ public class DownloadTransfer extends Transfer {
             // Read file size
             if(p.attributes.isFile()) {
                 if(p.attributes.isSymbolicLink()) {
-                    if(null != p.getSymbolicLinkPath()) {
-                        Path symlink = PathFactory.createPath(p.getSession(), p.getSymbolicLinkPath(),
+                    if(null != p.getSymlinkTarget()) {
+                        Path symlink = PathFactory.createPath(p.getSession(), p.getSymlinkTarget(),
                                 Path.FILE_TYPE);
                         if(symlink.attributes.getSize() == -1) {
                             symlink.readSize();
@@ -153,60 +152,41 @@ public class DownloadTransfer extends Transfer {
         }
     }
 
-    /**
-     * A compiled representation of a regular expression.
-     */
-    private Pattern DOWNLOAD_SKIP_PATTERN = null;
-
-    {
-        try {
-            DOWNLOAD_SKIP_PATTERN = Pattern.compile(
-                    Preferences.instance().getProperty("queue.download.skip.regex"));
-        }
-        catch(PatternSyntaxException e) {
-            log.warn(e.getMessage());
-        }
-    }
-
-    private final PathFilter childFilter = new PathFilter() {
-        public boolean accept(AbstractPath child) {
-            if(Preferences.instance().getBoolean("queue.download.skip.enable")
-                    && DOWNLOAD_SKIP_PATTERN.matcher(child.getName()).matches()) {
-                return false;
+    private final PathFilter<Path> childFilter = new PathFilter<Path>() {
+        public boolean accept(Path child) {
+            if(Preferences.instance().getBoolean("queue.download.skip.enable")) {
+                try {
+                    if(Pattern.compile(Preferences.instance().getProperty("queue.download.skip.regex")).matcher(child.getName()).matches()) {
+                        return false;
+                    }
+                }
+                catch(PatternSyntaxException e) {
+                    log.warn(e.getMessage());
+                }
             }
             return true;
         }
     };
 
+    @Override
     public AttributedList<Path> childs(final Path parent) {
-        if(!this.exists(parent)) {
-            // Cannot fetch file listing of non existant file
-            return new AttributedList<Path>(Collections.<Path>emptyList());
-        }
-        AttributedList<Path> downloads = new AttributedList<Path>();
-        final AttributedList<Path> list = (AttributedList<Path>) parent.childs(new NullComparator<Path>(), childFilter);
+        final AttributedList<Path> list = parent.childs(childFilter);
         for(Path download : list) {
             // Change download path relative to parent local folder
-            download.setLocal(new Local(parent.getLocal(), download.getName()));
-            download.getStatus().setSkipped(parent.getStatus().isSkipped());
-            downloads.add(download);
+            download.setLocal(LocalFactory.createLocal(parent.getLocal(), download.getLocal().getName()));
         }
-        downloads.attributes().setReadable(list.attributes().isReadable());
-        return downloads;
-    }
-
-    public boolean isCached(Path file) {
-        return file.isCached();
+        return list;
     }
 
     private final TransferFilter ACTION_OVERWRITE = new DownloadTransferFilter() {
         public boolean accept(final Path p) {
             if(p.attributes.isDirectory()) {
-                return !DownloadTransfer.this.exists(p.getLocal());
+                return !p.getLocal().exists();
             }
             return true;
         }
 
+        @Override
         public void prepare(final Path p) {
             if(p.attributes.isFile()) {
                 p.getStatus().setResume(false);
@@ -223,14 +203,15 @@ public class DownloadTransfer extends Transfer {
                 return false;
             }
             if(p.attributes.isDirectory()) {
-                return !DownloadTransfer.this.exists(p.getLocal());
+                return !p.getLocal().exists();
             }
             return true;
         }
 
+        @Override
         public void prepare(final Path p) {
             if(p.attributes.isFile()) {
-                final boolean resume = DownloadTransfer.this.exists(p.getLocal())
+                final boolean resume = p.getLocal().exists()
                         && p.getLocal().attributes.getSize() > 0;
                 p.getStatus().setResume(resume);
                 long skipped = p.getLocal().attributes.getSize();
@@ -245,23 +226,24 @@ public class DownloadTransfer extends Transfer {
             return true;
         }
 
+        @Override
         public void prepare(final Path p) {
             if(p.attributes.isFile()) {
                 p.getStatus().setResume(false);
             }
-            if(DownloadTransfer.this.exists(p.getLocal()) && p.getLocal().attributes.getSize() > 0) {
+            if(p.getLocal().exists() && p.getLocal().attributes.getSize() > 0) {
                 final String parent = p.getLocal().getParent().getAbsolute();
                 final String filename = p.getName();
                 int no = 0;
                 while(p.getLocal().exists()) {
                     no++;
-                    String proposal = FilenameUtils.getBaseName(filename)+ "-" + no;
+                    String proposal = FilenameUtils.getBaseName(filename) + "-" + no;
                     if(StringUtils.isNotBlank(FilenameUtils.getExtension(filename))) {
                         proposal += "." + FilenameUtils.getExtension(filename);
                     }
-                    p.setLocal(new Local(parent, proposal));
+                    p.setLocal(LocalFactory.createLocal(parent, proposal));
                 }
-                log.info("Changed local name to:" + p.getName());
+                log.info("Changed local name to:" + p.getLocal().getName());
             }
             super.prepare(p);
         }
@@ -269,10 +251,11 @@ public class DownloadTransfer extends Transfer {
 
     private final DownloadTransferFilter ACTION_SKIP = new DownloadTransferFilter() {
         public boolean accept(final Path p) {
-            return !DownloadTransfer.this.exists(p.getLocal());
+            return !p.getLocal().exists();
         }
     };
 
+    @Override
     public TransferFilter filter(final TransferAction action) {
         log.debug("filter:" + action);
         if(action.equals(TransferAction.ACTION_OVERWRITE)) {
@@ -289,7 +272,7 @@ public class DownloadTransfer extends Transfer {
         }
         if(action.equals(TransferAction.ACTION_CALLBACK)) {
             for(Path root : this.getRoots()) {
-                if(this.exists(root.getLocal())) {
+                if(root.getLocal().exists()) {
                     if(root.getLocal().attributes.isDirectory()) {
                         if(0 == root.getLocal().childs().size()) {
                             // Do not prompt for existing empty directories
@@ -313,6 +296,7 @@ public class DownloadTransfer extends Transfer {
         return super.filter(action);
     }
 
+    @Override
     public TransferAction action(final boolean resumeRequested, final boolean reloadRequested) {
         log.debug("action:" + resumeRequested + "," + reloadRequested);
         if(resumeRequested) {
@@ -330,8 +314,10 @@ public class DownloadTransfer extends Transfer {
         );
     }
 
+    @Override
     protected void _transferImpl(final Path p) {
         p.download(bandwidth, new AbstractStreamListener() {
+            @Override
             public void bytesReceived(long bytes) {
                 transferred += bytes;
             }
@@ -368,19 +354,14 @@ public class DownloadTransfer extends Transfer {
         }
     }
 
+    @Override
     protected void fireTransferDidEnd() {
         if(this.isReset() && this.isComplete() && !this.isCanceled() && !(this.getTransferred() == 0)) {
-            CDMainApplication.invoke(new DefaultMainAction() {
-                public void run() {
-                    Growl.instance().notify("Download complete", getName());
-                    if(DownloadTransfer.this.shouldOpenWhenComplete()) {
-                        NSWorkspace.sharedWorkspace().openFile(getRoot().getLocal().toString());
-                    }
-                    NSDistributedNotificationCenter.defaultCenter().postNotification(
-                            new NSNotification("com.apple.DownloadFileFinished", getRoot().getLocal().getAbsolute())
-                    );
-                }
-            }, true);
+            Growl.instance().notify("Download complete", getName());
+            if(this.shouldOpenWhenComplete()) {
+                this.getRoot().getLocal().open();
+            }
+            this.getRoot().getLocal().bounce();
         }
         super.fireTransferDidEnd();
     }

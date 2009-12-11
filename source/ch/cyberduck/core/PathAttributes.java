@@ -18,9 +18,11 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSDictionary;
-import com.apple.cocoa.foundation.NSMutableDictionary;
+import ch.cyberduck.core.i18n.Locale;
+import ch.cyberduck.core.serializer.Deserializer;
+import ch.cyberduck.core.serializer.DeserializerFactory;
+import ch.cyberduck.core.serializer.Serializer;
+import ch.cyberduck.core.serializer.SerializerFactory;
 
 import org.apache.log4j.Logger;
 
@@ -29,7 +31,7 @@ import org.apache.log4j.Logger;
  *
  * @version $Id$
  */
-public class PathAttributes extends Attributes implements Serializable {
+public class PathAttributes implements Attributes, Serializable {
     private static Logger log = Logger.getLogger(PathAttributes.class);
 
     /**
@@ -55,47 +57,43 @@ public class PathAttributes extends Attributes implements Serializable {
         super();
     }
 
-    private static final String TYPE = "Type";
-    private static final String SIZE = "Size";
-    private static final String MODIFIED = "Modified";
-    private static final String PERMISSION = "Permission";
-
-    public PathAttributes(NSDictionary dict) {
+    public <T> PathAttributes(T dict) {
         this.init(dict);
     }
 
-    public void init(NSDictionary dict) {
-        Object typeObj = dict.objectForKey(TYPE);
+    public <T> void init(T serialized) {
+        final Deserializer dict = DeserializerFactory.createDeserializer(serialized);
+        String typeObj = dict.stringForKey("Type");
         if(typeObj != null) {
-            this.type = Integer.parseInt((String) typeObj);
+            this.type = Integer.parseInt(typeObj);
         }
-        Object sizeObj = dict.objectForKey(SIZE);
+        String sizeObj = dict.stringForKey("Size");
         if(sizeObj != null) {
-            this.size = Long.parseLong((String) sizeObj);
+            this.size = Long.parseLong(sizeObj);
         }
-        Object modifiedObj = dict.objectForKey(MODIFIED);
+        String modifiedObj = dict.stringForKey("Modified");
         if(modifiedObj != null) {
-            this.modified = Long.parseLong((String) modifiedObj);
+            this.modified = Long.parseLong(modifiedObj);
         }
-        Object permissionObj = dict.objectForKey(PERMISSION);
+        Object permissionObj = dict.objectForKey("Permission");
         if(permissionObj != null) {
-            this.permission = new Permission((NSDictionary)permissionObj);
+            this.permission = new Permission(permissionObj);
         }
     }
 
-    public NSDictionary getAsDictionary() {
-        NSMutableDictionary dict = new NSMutableDictionary();
-        dict.setObjectForKey(String.valueOf(this.type), TYPE);
+    public <T> T getAsDictionary() {
+        final Serializer dict = SerializerFactory.createSerializer();
+        dict.setStringForKey(String.valueOf(this.type), "Type");
         if(this.size != -1) {
-            dict.setObjectForKey(String.valueOf(this.size), SIZE);
+            dict.setStringForKey(String.valueOf(this.size), "Size");
         }
         if(this.modified != -1) {
-            dict.setObjectForKey(String.valueOf(this.modified), MODIFIED);
+            dict.setStringForKey(String.valueOf(this.modified), "Modified");
         }
         if(null != permission) {
-            dict.setObjectForKey(permission.getAsDictionary(), PERMISSION);
+            dict.setObjectForKey(permission, "Permission");
         }
-        return dict;
+        return dict.<T>getSerialized();
     }
 
     /**
@@ -184,7 +182,7 @@ public class PathAttributes extends Attributes implements Serializable {
      */
     public String getOwner() {
         if(null == this.owner) {
-            return NSBundle.localizedString("Unknown", "");
+            return Locale.localizedString("Unknown");
         }
         return this.owner;
     }
@@ -198,7 +196,7 @@ public class PathAttributes extends Attributes implements Serializable {
      */
     public String getGroup() {
         if(null == this.group) {
-            return NSBundle.localizedString("Unknown", "");
+            return Locale.localizedString("Unknown");
         }
         return this.group;
     }

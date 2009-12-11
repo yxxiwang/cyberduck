@@ -18,18 +18,19 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
+import com.ibm.icu.text.Normalizer;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang.StringUtils;
+import org.apache.log4j.Logger;
 import org.jets3t.service.utils.Mimetypes;
 
 import java.util.Comparator;
-
-import com.ibm.icu.text.Normalizer;
 
 /**
  * @version $Id$
  */
 public abstract class AbstractPath {
+    private static Logger log = Logger.getLogger(AbstractPath.class);
 
     /**
      * The path delimiter
@@ -69,11 +70,11 @@ public abstract class AbstractPath {
      */
     public void invalidate() {
         if(attributes.isDirectory()) {
-            if(this.isCached()) {
-                this.cache().get(this).attributes().setDirty(true);
-            }
+            this.cache().get(this).attributes().setDirty(true);
         }
     }
+
+    public abstract <T> PathReference<T> getReference();
 
     public abstract String toURL();
 
@@ -85,12 +86,27 @@ public abstract class AbstractPath {
     public abstract <T extends AbstractPath> AttributedList<T> list();
 
     /**
-     * Get the cached directory listing if any or return #list instead
+     * Get the cached directory listing if any or return #list instead.
+     * No sorting and filtering applied.
      *
-     * @return
+     * @return Cached directory listing as returned by the server
+     * @see #list()
      */
     public <T extends AbstractPath> AttributedList<T> childs() {
-        return this.childs(new NullComparator<T>(), new NullPathFilter<T>());
+        return this.childs(new NullPathFilter<T>());
+    }
+
+    /**
+     * Get the cached directory listing if any or return #list instead.
+     * No sorting applied.
+     *
+     * @param filter Filter to apply to directory listing
+     * @param <T>
+     * @return Cached directory listing as returned by the server filtered
+     * @see #list()
+     */
+    public <T extends AbstractPath> AttributedList<T> childs(PathFilter<T> filter) {
+        return this.childs(new NullComparator<T>(), filter);
     }
 
     /**
@@ -100,6 +116,7 @@ public abstract class AbstractPath {
      * @param comparator The comparator to sort the listing with
      * @param filter     The filter to exlude certain files
      * @return The children of this path or an empty list if it is not accessible for some reason
+     * @see #list()
      */
     public <T extends AbstractPath> AttributedList<T> childs(Comparator<T> comparator, PathFilter<T> filter) {
         if(!this.isCached()) {
@@ -280,17 +297,17 @@ public abstract class AbstractPath {
      * @param parent Absolute path to the symbolic link
      * @param name   Target of the symbolic link name. Absolute or relative pathname
      */
-    public void setSymbolicLinkPath(String parent, String name) {
+    public void setSymlinkTarget(String parent, String name) {
         if(name.startsWith(DELIMITER)) {
             // Symbolic link target may be an absolute path
-            this.setSymbolicLinkPath(name);
+            this.setSymlinkTarget(name);
         }
         else {
             if(parent.endsWith(DELIMITER)) {
-                this.setSymbolicLinkPath(parent + name);
+                this.setSymlinkTarget(parent + name);
             }
             else {
-                this.setSymbolicLinkPath(parent + DELIMITER + name);
+                this.setSymlinkTarget(parent + DELIMITER + name);
             }
         }
     }
@@ -300,7 +317,7 @@ public abstract class AbstractPath {
      */
     private String symbolic = null;
 
-    public void setSymbolicLinkPath(String p) {
+    public void setSymlinkTarget(String p) {
         this.symbolic = AbstractPath.normalize(p);
     }
 
@@ -308,7 +325,7 @@ public abstract class AbstractPath {
      * @return The target of the symbolic link if this path denotes a symbolic link
      * @see ch.cyberduck.core.PathAttributes#isSymbolicLink
      */
-    public String getSymbolicLinkPath() {
+    public String getSymlinkTarget() {
         if(this.attributes.isSymbolicLink()) {
             return this.symbolic;
         }
@@ -371,4 +388,46 @@ public abstract class AbstractPath {
      * @param copy
      */
     public abstract void copy(AbstractPath copy);
+
+    /**
+     * @return true if executable for user, group and world
+     */
+    public boolean isExecutable() {
+        final Permission perm = attributes.getPermission();
+        if(null == perm) {
+            log.warn("Unknown permissions");
+            return true;
+        }
+        return perm.getOwnerPermissions()[Permission.EXECUTE]
+                || perm.getGroupPermissions()[Permission.EXECUTE]
+                || perm.getOtherPermissions()[Permission.EXECUTE];
+    }
+
+    /**
+     * @return true if readable for user, group and world
+     */
+    public boolean isReadable() {
+        final Permission perm = attributes.getPermission();
+        if(null == perm) {
+            log.warn("Unknown permissions");
+            return true;
+        }
+        return perm.getOwnerPermissions()[Permission.READ]
+                || perm.getGroupPermissions()[Permission.READ]
+                || perm.getOtherPermissions()[Permission.READ];
+    }
+
+    /**
+     * @return true if writable for user, group and world
+     */
+    public boolean isWritable() {
+        final Permission perm = attributes.getPermission();
+        if(null == perm) {
+            log.warn("Unknown permissions");
+            return true;
+        }
+        return perm.getOwnerPermissions()[Permission.WRITE]
+                || perm.getGroupPermissions()[Permission.WRITE]
+                || perm.getOtherPermissions()[Permission.WRITE];
+    }
 }

@@ -18,11 +18,11 @@ package ch.cyberduck.core.s3;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-
 import ch.cyberduck.core.*;
+import ch.cyberduck.core.cloud.CloudSession;
 import ch.cyberduck.core.http.HTTPSession;
 import ch.cyberduck.core.http.StickyHostConfiguration;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.core.ssl.*;
 
 import org.apache.commons.httpclient.HostConfiguration;
@@ -32,6 +32,8 @@ import org.apache.commons.httpclient.URIException;
 import org.apache.commons.httpclient.auth.AuthScheme;
 import org.apache.commons.httpclient.auth.CredentialsNotAvailableException;
 import org.apache.commons.httpclient.auth.CredentialsProvider;
+import org.apache.commons.httpclient.protocol.DefaultProtocolSocketFactory;
+import org.apache.commons.httpclient.protocol.ProtocolSocketFactory;
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
 import org.jets3t.service.*;
@@ -53,7 +55,7 @@ import java.util.List;
 /**
  * @version $Id$
  */
-public class S3Session extends HTTPSession implements SSLSession {
+public class S3Session extends HTTPSession implements SSLSession, CloudSession {
     private static Logger log = Logger.getLogger(S3Session.class);
 
     static {
@@ -61,6 +63,7 @@ public class S3Session extends HTTPSession implements SSLSession {
     }
 
     private static class Factory extends SessionFactory {
+        @Override
         protected Session create(Host h) {
             return new S3Session(h);
         }
@@ -90,7 +93,7 @@ public class S3Session extends HTTPSession implements SSLSession {
      *
      * @param trustManager
      */
-    public void setTrustManager(AbstractX509TrustManager trustManager) {
+    private void setTrustManager(AbstractX509TrustManager trustManager) {
         this.trustManager = trustManager;
     }
 
@@ -103,9 +106,6 @@ public class S3Session extends HTTPSession implements SSLSession {
      */
     protected Jets3tProperties configuration = new Jets3tProperties();
 
-    /**
-     * @param configuration
-     */
     protected void configure() {
         configuration.setProperty("s3service.https-only", String.valueOf(host.getProtocol().isSecure()));
         // The maximum number of retries that will be attempted when an S3 connection fails
@@ -116,16 +116,21 @@ public class S3Session extends HTTPSession implements SSLSession {
         configuration.setProperty("s3service.max-thread-count", String.valueOf(1));
 
         configuration.setProperty("httpclient.proxy-autodetect", "false");
+        final Proxy proxy = ProxyFactory.instance();
         if(host.getProtocol().isSecure()) {
-            if(Proxy.isHTTPSProxyEnabled()) {
-                configuration.setProperty("httpclient.proxy-host", Proxy.getHTTPSProxyHost());
-                configuration.setProperty("httpclient.proxy-port", String.valueOf(Proxy.getHTTPSProxyPort()));
+            if(proxy.isHTTPSProxyEnabled()) {
+                configuration.setProperty("httpclient.proxy-host", proxy.getHTTPSProxyHost());
+                configuration.setProperty("httpclient.proxy-port", String.valueOf(proxy.getHTTPSProxyPort()));
+                configuration.setProperty("httpclient.proxy-user", null);
+                configuration.setProperty("httpclient.proxy-password", null);
             }
         }
         else {
-            if(Proxy.isHTTPProxyEnabled()) {
-                configuration.setProperty("httpclient.proxy-host", Proxy.getHTTPProxyHost());
-                configuration.setProperty("httpclient.proxy-port", String.valueOf(Proxy.getHTTPProxyPort()));
+            if(proxy.isHTTPProxyEnabled()) {
+                configuration.setProperty("httpclient.proxy-host", proxy.getHTTPProxyHost());
+                configuration.setProperty("httpclient.proxy-port", String.valueOf(proxy.getHTTPProxyPort()));
+                configuration.setProperty("httpclient.proxy-user", null);
+                configuration.setProperty("httpclient.proxy-password", null);
             }
         }
         configuration.setProperty("httpclient.connection-timeout-ms", String.valueOf(this.timeout()));
@@ -207,13 +212,14 @@ public class S3Session extends HTTPSession implements SSLSession {
         return buckets;
     }
 
+    @Override
     protected void connect() throws IOException, ConnectionCanceledException, LoginCanceledException {
         if(this.isConnected()) {
             return;
         }
         this.fireConnectionWillOpenEvent();
 
-        this.message(MessageFormat.format(NSBundle.localizedString("Opening {0} connection to {1}", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("Opening {0} connection to {1}", "Status"),
                 host.getProtocol().getName(), host.getHostname()));
 
         // Configure connection options
@@ -221,17 +227,26 @@ public class S3Session extends HTTPSession implements SSLSession {
 
         // Prompt the login credentials first
         this.login();
-        this.message(MessageFormat.format(NSBundle.localizedString("{0} connection opened", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("{0} connection opened", "Status"),
                 host.getProtocol().getName()));
         this.fireConnectionDidOpenEvent();
     }
 
+    @Override
     protected void login(final Credentials credentials) throws IOException {
         final HostConfiguration hostconfig = new StickyHostConfiguration();
-        hostconfig.setHost(host.getHostname(), host.getPort(),
-                new org.apache.commons.httpclient.protocol.Protocol(host.getProtocol().getScheme(),
-                        new CustomTrustSSLProtocolSocketFactory(this.getTrustManager()), host.getPort())
-        );
+        if(host.getProtocol().isSecure()) {
+            hostconfig.setHost(host.getHostname(), host.getPort(),
+                    new org.apache.commons.httpclient.protocol.Protocol(host.getProtocol().getScheme(),
+                            (ProtocolSocketFactory) new CustomTrustSSLProtocolSocketFactory(this.getTrustManager()), host.getPort())
+            );
+        }
+        else {
+            hostconfig.setHost(host.getHostname(), host.getPort(),
+                    new org.apache.commons.httpclient.protocol.Protocol(host.getProtocol().getScheme(),
+                            new DefaultProtocolSocketFactory(), host.getPort())
+            );
+        }
         this.login(credentials, hostconfig);
     }
 
@@ -259,9 +274,9 @@ public class S3Session extends HTTPSession implements SSLSession {
         }
         catch(S3ServiceException e) {
             if(this.isLoginFailure(e)) {
-                this.message(NSBundle.localizedString("Login failed", "Credentials", ""));
+                this.message(Locale.localizedString("Login failed", "Credentials"));
                 this.login.fail(host,
-                        NSBundle.localizedString("Login with username and password", "Credentials", ""));
+                        Locale.localizedString("Login with username and password", "Credentials"));
                 this.login();
             }
             else {
@@ -278,6 +293,7 @@ public class S3Session extends HTTPSession implements SSLSession {
                 || e.getS3ErrorCode().equals("SignatureDoesNotMatch"); // Invalid Secret Key
     }
 
+    @Override
     public void close() {
         try {
             if(this.isConnected()) {
@@ -290,6 +306,7 @@ public class S3Session extends HTTPSession implements SSLSession {
         }
     }
 
+    @Override
     public void interrupt() {
         try {
             super.interrupt();
@@ -303,33 +320,31 @@ public class S3Session extends HTTPSession implements SSLSession {
         }
     }
 
-    public Path workdir() throws IOException {
-        if(!this.isConnected()) {
-            throw new ConnectionCanceledException();
-        }
-        if(null == workdir) {
-            workdir = PathFactory.createPath(this, Path.DELIMITER, Path.VOLUME_TYPE | Path.DIRECTORY_TYPE);
-        }
-        return workdir;
-    }
-
+    @Override
     protected void noop() throws IOException {
         ;
     }
 
+    @Override
     public void sendCommand(String command) throws IOException {
         throw new UnsupportedOperationException();
     }
 
+    @Override
     public boolean isConnected() {
         return S3 != null;
     }
 
     /**
-     * Amazon CloudFront Extension
+     * Amazon CloudFront Extension to create a new distribution configuration
+     * *
      *
-     * @param path
-     * @return
+     * @param enabled Distribution status
+     * @param bucket  Name of the container
+     * @param cnames  DNS CNAME aliases for distribution
+     * @param logging Access log configuration
+     * @return Distribution configuration
+     * @throws CloudFrontServiceException CloudFront failure details
      */
     public Distribution createDistribution(boolean enabled, final String bucket, String[] cnames, LoggingStatus logging) throws CloudFrontServiceException {
         final long reference = System.currentTimeMillis();
@@ -346,8 +361,11 @@ public class S3Session extends HTTPSession implements SSLSession {
     /**
      * Amazon CloudFront Extension used to enable or disable a distribution configuration and its CNAMESs
      *
-     * @param distribution
+     * @param distribution Distribution configuration
      * @param cnames       DNS CNAME aliases for distribution
+     * @param enabled      Distribution status
+     * @param logging      Access log configuration
+     * @throws CloudFrontServiceException CloudFront failure details
      */
     public void updateDistribution(boolean enabled, final Distribution distribution, String[] cnames, LoggingStatus logging) throws CloudFrontServiceException {
         final long reference = System.currentTimeMillis();
@@ -363,23 +381,26 @@ public class S3Session extends HTTPSession implements SSLSession {
     /**
      * Amazon CloudFront Extension used to list all configured distributions
      *
+     * @param bucket Name of the container
      * @return All distributions for the given AWS Credentials
+     * @throws CloudFrontServiceException CloudFront failure details
      */
     public Distribution[] listDistributions(String bucket) throws CloudFrontServiceException {
         return this.createCloudFrontService().listDistributions(bucket);
     }
 
     /**
-     * @param distribution
+     * @param distribution Distribution configuration
      * @return
-     * @throws CloudFrontServiceException
+     * @throws CloudFrontServiceException CloudFront failure details
      */
-    public DistributionConfig getDistributionConfig(final Distribution distribution) throws CloudFrontServiceException {
+    protected DistributionConfig getDistributionConfig(final Distribution distribution) throws CloudFrontServiceException {
         return this.createCloudFrontService().getDistributionConfig(distribution.getId());
     }
 
     /**
      * @param distribution A distribution (the distribution must be disabled and deployed first)
+     * @throws CloudFrontServiceException CloudFront failure details
      */
     public void deleteDistribution(final Distribution distribution) throws CloudFrontServiceException {
         this.createCloudFrontService().deleteDistribution(distribution.getId());
@@ -394,7 +415,7 @@ public class S3Session extends HTTPSession implements SSLSession {
      * Amazon CloudFront Extension
      *
      * @return A cached cloud front service interface
-     * @throws CloudFrontServiceException
+     * @throws CloudFrontServiceException CloudFront failure
      */
     private CloudFrontService createCloudFrontService() throws CloudFrontServiceException {
         if(null == cloudfront) {
@@ -404,10 +425,10 @@ public class S3Session extends HTTPSession implements SSLSession {
             HostConfiguration hostconfig = null;
             try {
                 hostconfig = new StickyHostConfiguration();
-                final HttpHost endpoint = new HttpHost(new URI(CloudFrontService.ENDPOINT));
+                final HttpHost endpoint = new HttpHost(new URI(CloudFrontService.ENDPOINT, false));
                 hostconfig.setHost(endpoint.getHostName(), endpoint.getPort(),
                         new org.apache.commons.httpclient.protocol.Protocol(endpoint.getProtocol().getScheme(),
-                                new CustomTrustSSLProtocolSocketFactory(new KeychainX509TrustManager(endpoint.getHostName())), endpoint.getPort())
+                                (ProtocolSocketFactory) new CustomTrustSSLProtocolSocketFactory(new KeychainX509TrustManager(endpoint.getHostName())), endpoint.getPort())
                 );
             }
             catch(URIException e) {
@@ -421,5 +442,80 @@ public class S3Session extends HTTPSession implements SSLSession {
                     hostconfig);
         }
         return cloudfront;
+    }
+
+
+    /**
+     * @return
+     */
+    public ch.cyberduck.core.cloud.Distribution readDistribution(String container) {
+        if(this.getHost().getCredentials().isAnonymousLogin()) {
+            return new ch.cyberduck.core.cloud.Distribution(false, null, null);
+        }
+        try {
+            this.check();
+            for(org.jets3t.service.model.cloudfront.Distribution d : this.listDistributions(container)) {
+                // Retrieve distribution's configuration to access current logging status settings.
+                final DistributionConfig distributionConfig = this.getDistributionConfig(d);
+                // We currently only support one distribution per bucket
+                return new ch.cyberduck.core.cloud.Distribution(d.isEnabled(), d.getStatus().equals("InProgress"),
+                        "http://" + d.getDomainName(), Locale.localizedString(d.getStatus(), "S3"), d.getCNAMEs(),
+                        distributionConfig.isLoggingEnabled());
+            }
+        }
+        catch(CloudFrontServiceException e) {
+            if(e.getResponseCode() == 403) {
+                log.warn("Invalid CloudFront account:" + e.getMessage());
+                return new ch.cyberduck.core.cloud.Distribution(false, null, null);
+            }
+            this.error("Cannot read file attributes", e);
+        }
+        catch(IOException e) {
+            this.error("Cannot read file attributes", e);
+        }
+        return new ch.cyberduck.core.cloud.Distribution(false, null, null);
+    }
+
+    /**
+     * Amazon CloudFront Extension
+     *
+     * @param enabled
+     * @param cnames
+     * @param logging
+     */
+    public void writeDistribution(String container, final boolean enabled, final String[] cnames, boolean logging) {
+        if(this.getHost().getCredentials().isAnonymousLogin()) {
+            return;
+        }
+        try {
+            LoggingStatus l = null;
+            if(logging) {
+                l = new LoggingStatus(
+                        this.getHostnameForBucket(container),
+                        Preferences.instance().getProperty("cloudfront.logging.prefix"));
+            }
+            this.check();
+            if(enabled) {
+                this.message(MessageFormat.format(Locale.localizedString("Enable {0} Distribution", "Status"),
+                        Locale.localizedString("Amazon CloudFront", "S3")));
+            }
+            else {
+                this.message(MessageFormat.format(Locale.localizedString("Disable {0} Distribution", "Status"),
+                        Locale.localizedString("Amazon CloudFront", "S3")));
+            }
+            for(org.jets3t.service.model.cloudfront.Distribution distribution : this.listDistributions(container)) {
+                this.updateDistribution(enabled, distribution, cnames, l);
+                // We currently only support one distribution per bucket
+                return;
+            }
+            // Create new configuration
+            this.createDistribution(enabled, container, cnames, l);
+        }
+        catch(CloudFrontServiceException e) {
+            this.error("Cannot write file attributes", e);
+        }
+        catch(IOException e) {
+            this.error("Cannot write file attributes", e);
+        }
     }
 }

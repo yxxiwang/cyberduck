@@ -37,6 +37,7 @@ public class Cache<E extends AbstractPath> {
     private Map<String, AttributedList<E>> _impl = Collections.<String, AttributedList<E>>synchronizedMap(new LRUMap(
             Preferences.instance().getInteger("browser.cache.size")
     ) {
+        @Override
         protected boolean removeLRU(LinkEntry entry) {
             log.debug("Removing from cache:" + entry);
             return true;
@@ -44,36 +45,21 @@ public class Cache<E extends AbstractPath> {
     });
 
     /**
-     *
-     */
-    public Cache() {
-        ;
-    }
-
-    /**
-     * @param path
+     * @param path Absolute path
      * @return
      */
-    public E lookup(String path) {
-        if(null == path) {
+    public E lookup(PathReference path) {
+        final AttributedList<E> childs = this.get(Path.getParent(path.toString()));
+        final E found = childs.get(path);
+        if(null == found) {
+            log.warn("Lookup failed for " + path + " in cache");
             return null;
         }
-        final String parent = Path.getParent(path);
-        if(this.containsKey(parent)) {
-            final AttributedList<E> childs = this.get(parent);
-            for(E child : childs) {
-                if(child.getAbsolute().equals(path)) {
-                    return child;
-                }
-            }
-        }
-        log.warn("Lookup failed for " + path + " in cache");
-        return null;
+        return found;
     }
 
-
     /**
-     * @param path
+     * @param path Absolute path
      * @return True if the directory listing for this path is cached
      */
     public boolean containsKey(E path) {
@@ -81,18 +67,18 @@ public class Cache<E extends AbstractPath> {
     }
 
     /**
-     * @param path
-     * @return
+     * @param path Absolute path
+     * @return True if the directory listing of this path is cached
      */
     public boolean containsKey(String path) {
         return _impl.containsKey(path);
     }
 
     /**
-     * Remotes the cached directory listing for this path
+     * Remove the cached directory listing for this path
      *
-     * @param path
-     * @return
+     * @param path Absolute path
+     * @return The previuosly cached directory listing
      */
     public AttributedList<E> remove(E path) {
         return _impl.remove(path.getAbsolute());
@@ -101,79 +87,116 @@ public class Cache<E extends AbstractPath> {
     /**
      * Get the childs of this path using the last sorting and filter used
      *
-     * @param path
-     * @return null if no cached file listing is available
+     * @param path Absolute path
+     * @return An empty list if no cached file listing is available
      */
     public AttributedList<E> get(E path) {
         return this.get(path.getAbsolute());
     }
 
     /**
-     * @param path
-     * @return
+     * @param path Absolute path
+     * @return An empty list if no cached file listing is available
      */
     public AttributedList<E> get(String path) {
-        return _impl.get(path);
+        final AttributedList<E> childs = _impl.get(path);
+        if(null == childs) {
+            log.warn("No cache for " + path);
+            return AttributedList.emptyList();
+        }
+        return childs;
     }
 
     /**
-     * @param path
+     * @param path       Absolute path
      * @param comparator
      * @param filter
-     * @return null if no cached file listing is available
+     * @return An empty list if no cached file listing is available
      */
     public AttributedList<E> get(final E path, final Comparator<E> comparator, final PathFilter<E> filter) {
         return this.get(path.getAbsolute(), comparator, filter);
     }
 
     /**
-     * @param path
-     * @param comparator
-     * @param filter
-     * @return
+     * @param path       Absolute path
+     * @param comparator Sorting comparator to apply the the file listing
+     * @param filter     Path filter to apply. All files that don't match are moved to the
+     *                   hidden attribute of the attributed list.
+     * @return An empty list if no cached file listing is available
+     * @throws ConcurrentModificationException
+     *          If the caller is iterating of the cache himself
+     *          and requests a new filter here.
      */
     public AttributedList<E> get(final String path, final Comparator<E> comparator, final PathFilter<E> filter) {
         AttributedList<E> childs = _impl.get(path);
         if(null == childs) {
-            return null;
+            log.warn("No cache for " + path);
+            return AttributedList.emptyList();
         }
         boolean needsSorting = !childs.attributes().get(AttributedList.COMPARATOR).equals(comparator);
         boolean needsFiltering = !childs.attributes().get(AttributedList.FILTER).equals(filter);
         if(needsSorting) {
-            //do not sort when the list has not been filtered yet
+            // Do not sort when the list has not been filtered yet
             if(!needsFiltering) {
-                Collections.sort(childs, comparator);
+                this.sort(childs, comparator);
             }
-            //saving last sorting comparator
+            // Saving last sorting comparator
             childs.attributes().put(AttributedList.COMPARATOR, comparator);
         }
         if(needsFiltering) {
-            //add previously hidden files to childs
-            childs.addAll((Set) childs.attributes().get(AttributedList.HIDDEN));
-            //clear the previously set of hidden files
-            ((Set) childs.attributes().get(AttributedList.HIDDEN)).clear();
-            for(Iterator<E> i = childs.iterator(); i.hasNext();) {
-                E child = i.next();
+            // Add previously hidden files to childs
+            final Set<E> hidden = childs.attributes().getHidden();
+            childs.addAll(hidden);
+            // Clear the previously set of hidden files
+            hidden.clear();
+            for(E child : childs) {
                 if(!filter.accept(child)) {
                     //child not accepted by filter; add to cached hidden files
                     childs.attributes().addHidden(child);
                     //remove hidden file from current file listing
-                    i.remove();
+                    childs.remove(child);
                 }
             }
-            //saving last filter
+            // Saving last filter
             childs.attributes().put(AttributedList.FILTER, filter);
-            //sort again because the list has changed
-            Collections.sort(childs, comparator);
+            // Sort again because the list has changed
+            this.sort(childs, comparator);
         }
         return childs;
     }
 
+    /**
+     * The CopyOnWriteArrayList iterator does not support remove but the sort implementation
+     * makes use of it. Provide our own implementation here to circumvent.
+     *
+     * @param childs
+     * @param comparator
+     * @see java.util.Collections#sort(java.util.List, java.util.Comparator)
+     * @see java.util.concurrent.CopyOnWriteArrayList#iterator()
+     */
+    private void sort(AttributedList<E> childs, Comparator comparator) {
+        // Because AttributedList is a CopyOnWriteArrayList we can not use Collections.sort
+        AbstractPath[] sorted = childs.toArray(new AbstractPath[childs.size()]);
+        Arrays.sort(sorted, (Comparator<AbstractPath>) comparator);
+        for(int j = 0; j < sorted.length; j++) {
+            childs.set(j, (E) sorted[j]);
+        }
+    }
+
+    /**
+     * @param path   Absolute path
+     * @param childs
+     * @return
+     */
     public AttributedList<E> put(E path, AttributedList<E> childs) {
         return _impl.put(path.getAbsolute(), childs);
     }
 
+    /**
+     * Clear all cached directory listings
+     */
     public void clear() {
+        log.info("Clearing cache " + this.toString());
         _impl.clear();
     }
 }

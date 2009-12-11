@@ -18,12 +18,11 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSTextField;
-import com.apple.cocoa.application.NSView;
-import com.apple.cocoa.foundation.NSAttributedString;
-import com.apple.cocoa.foundation.NSBundle;
-
-import ch.cyberduck.ui.cocoa.threading.BackgroundException;
+import ch.cyberduck.core.i18n.Locale;
+import ch.cyberduck.core.threading.BackgroundException;
+import ch.cyberduck.ui.cocoa.application.NSTextField;
+import ch.cyberduck.ui.cocoa.application.NSView;
+import ch.cyberduck.ui.cocoa.foundation.NSAttributedString;
 
 import org.apache.commons.httpclient.HttpException;
 import org.apache.commons.httpclient.StatusLine;
@@ -38,7 +37,7 @@ import java.net.UnknownHostException;
 
 import ch.ethz.ssh2.sftp.SFTPException;
 import com.enterprisedt.net.ftp.FTPException;
-import com.mosso.client.cloudfiles.FilesException;
+import com.rackspacecloud.client.cloudfiles.FilesException;
 
 /**
  * @version $Id:$
@@ -46,44 +45,49 @@ import com.mosso.client.cloudfiles.FilesException;
 public class CDErrorController extends CDBundleController {
     private static Logger log = Logger.getLogger(CDTaskController.class);
 
+    @Outlet
     private NSTextField hostField;
 
     public void setHostField(NSTextField hostField) {
         this.hostField = hostField;
         if(null == failure.getPath()) {
             this.hostField.setAttributedStringValue(
-                    new NSAttributedString(failure.getSession().getHost().toURL(), FIXED_WITH_FONT_ATTRIBUTES));
+                    NSAttributedString.attributedStringWithAttributes(failure.getSession().getHost().toURL(), FIXED_WITH_FONT_ATTRIBUTES));
         }
         else {
             this.hostField.setAttributedStringValue(
-                    new NSAttributedString(failure.getPath().getAbsolute(), FIXED_WITH_FONT_ATTRIBUTES));
+                    NSAttributedString.attributedStringWithAttributes(failure.getPath().getAbsolute(), FIXED_WITH_FONT_ATTRIBUTES));
         }
     }
 
+    @Outlet
     private NSTextField descriptionField;
 
     public void setDescriptionField(NSTextField descriptionField) {
         this.descriptionField = descriptionField;
         this.descriptionField.setSelectable(true);
         this.descriptionField.setAttributedStringValue(
-                new NSAttributedString(this.getDetailedCauseMessage(failure), TRUNCATE_MIDDLE_ATTRIBUTES));
+                NSAttributedString.attributedStringWithAttributes(this.getDetailedCauseMessage(failure), TRUNCATE_MIDDLE_ATTRIBUTES));
     }
 
+    @Outlet
     private NSTextField errorField;
 
     public void setErrorField(NSTextField errorField) {
         this.errorField = errorField;
         this.errorField.setSelectable(true);
         this.errorField.setAttributedStringValue(
-                new NSAttributedString(this.getReadableTitle(failure) + ": " + failure.getMessage(), TRUNCATE_MIDDLE_ATTRIBUTES));
+                NSAttributedString.attributedStringWithAttributes(this.getReadableTitle(failure) + ": " + failure.getMessage(), TRUNCATE_MIDDLE_ATTRIBUTES));
     }
 
+    @Outlet
     private NSView view;
 
     public void setView(NSView view) {
         this.view = view;
     }
 
+    @Override
     public NSView view() {
         return view;
     }
@@ -95,33 +99,40 @@ public class CDErrorController extends CDBundleController {
         this.loadBundle();
     }
 
+    /**
+     * @return
+     */
+    public String getTooltip() {
+        return this.getReadableTitle(failure);
+    }
+
     private String getReadableTitle(BackgroundException e) {
         final Throwable cause = e.getCause();
         if(cause instanceof FTPException) {
-            return "FTP " + NSBundle.localizedString("Error", "");
+            return "FTP " + Locale.localizedString("Error");
         }
         if(cause instanceof SFTPException) {
-            return "SSH " + NSBundle.localizedString("Error", "");
+            return "SSH " + Locale.localizedString("Error");
         }
         if(cause instanceof S3ServiceException) {
-            return "S3 " + NSBundle.localizedString("Error", "");
+            return "S3 " + Locale.localizedString("Error");
         }
         if(cause instanceof CloudFrontServiceException) {
-            return "CloudFront " + NSBundle.localizedString("Error", "");
+            return "CloudFront " + Locale.localizedString("Error");
         }
         if(cause instanceof HttpException) {
-            return "HTTP " + NSBundle.localizedString("Error", "");
+            return "HTTP " + Locale.localizedString("Error");
         }
         if(cause instanceof SocketException) {
-            return "Network " + NSBundle.localizedString("Error", "");
+            return "Network " + Locale.localizedString("Error");
         }
         if(cause instanceof UnknownHostException) {
-            return "DNS " + NSBundle.localizedString("Error", "");
+            return "DNS " + Locale.localizedString("Error");
         }
         if(cause instanceof IOException) {
-            return "I/O " + NSBundle.localizedString("Error", "");
+            return "I/O " + Locale.localizedString("Error");
         }
-        return NSBundle.localizedString("Error", "");
+        return Locale.localizedString("Error");
     }
 
     private String getDetailedCauseMessage(BackgroundException e) {
@@ -129,23 +140,20 @@ public class CDErrorController extends CDBundleController {
         StringBuilder buffer = new StringBuilder();
         if(null != cause) {
             if(StringUtils.isNotBlank(cause.getMessage())) {
-                buffer.append(cause.getMessage()).append(".");
+                buffer.append(cause.getMessage());
             }
             if(cause instanceof SFTPException) {
-                final SFTPException sftp = (SFTPException) cause;
-                if(StringUtils.isNotBlank(sftp.getServerErrorCodeVerbose())) {
-                    buffer.append(" ").append(sftp.getServerErrorCodeVerbose()).append(".");
-                }
+                ;
             }
             if(cause instanceof S3ServiceException) {
                 final S3ServiceException s3 = (S3ServiceException) cause;
                 if(StringUtils.isNotBlank(s3.getResponseStatus())) {
                     // HTTP method status
-                    buffer.append(" ").append(s3.getResponseStatus()).append(".");
+                    buffer.append(" ").append(s3.getResponseStatus());
                 }
                 if(StringUtils.isNotBlank(s3.getS3ErrorMessage())) {
                     // S3 protocol message
-                    buffer.append(" ").append(s3.getS3ErrorMessage()).append(".");
+                    buffer.append(" ").append(s3.getS3ErrorMessage());
                 }
             }
             if(cause instanceof CloudFrontServiceException) {
@@ -154,7 +162,7 @@ public class CDErrorController extends CDBundleController {
                     buffer.append(cf.getErrorMessage()).append(". ");
                 }
                 if(StringUtils.isNotBlank(cf.getErrorDetail())) {
-                    buffer.append(" ").append(cf.getErrorDetail()).append(".");
+                    buffer.append(" ").append(cf.getErrorDetail());
                 }
             }
             if(cause instanceof FilesException) {
@@ -162,18 +170,19 @@ public class CDErrorController extends CDBundleController {
                 final StatusLine status = cf.getHttpStatusLine();
                 if(null != status) {
                     if(StringUtils.isNotBlank(status.getReasonPhrase())) {
-                        buffer.append(" ").append(status.getReasonPhrase()).append(".");
+                        buffer.append(" ").append(status.getReasonPhrase());
                     }
                 }
             }
         }
-        return NSBundle.localizedString(buffer.toString(), "Error", "");
+        String message = buffer.toString();
+        if(!StringUtils.isEmpty(message) && !message.endsWith(".")) {
+            message = message + ".";
+        }
+        return Locale.localizedString(message, "Error");
     }
 
-    public void awakeFromNib() {
-        ;
-    }
-
+    @Override
     protected String getBundleName() {
         return "Error";
     }

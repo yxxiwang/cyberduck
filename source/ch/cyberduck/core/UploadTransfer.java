@@ -18,19 +18,14 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSDictionary;
-import com.apple.cocoa.foundation.NSMutableDictionary;
-
 import ch.cyberduck.core.io.BandwidthThrottle;
 import ch.cyberduck.core.s3.S3Session;
-import ch.cyberduck.ui.cocoa.CDMainApplication;
-import ch.cyberduck.ui.cocoa.growl.Growl;
-import ch.cyberduck.ui.cocoa.threading.DefaultMainAction;
+import ch.cyberduck.core.serializer.Serializer;
+import ch.cyberduck.ui.growl.Growl;
 
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang.StringUtils;
 
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -49,27 +44,30 @@ public class UploadTransfer extends Transfer {
         super(roots);
     }
 
-    public UploadTransfer(NSDictionary dict, Session s) {
+    public <T> UploadTransfer(T dict, Session s) {
         super(dict, s);
     }
 
-    public NSMutableDictionary getAsDictionary() {
-        NSMutableDictionary dict = super.getAsDictionary();
-        dict.setObjectForKey(String.valueOf(TransferFactory.KIND_UPLOAD), "Kind");
-        return dict;
+    @Override
+    public <T> T getAsDictionary() {
+        final Serializer dict = super.getSerializer();
+        dict.setStringForKey(String.valueOf(KIND_UPLOAD), "Kind");
+        return dict.<T>getSerialized();
     }
 
+    @Override
     protected void init() {
         log.debug("init");
         this.bandwidth = new BandwidthThrottle(
                 Preferences.instance().getFloat("queue.upload.bandwidth.bytes"));
     }
 
+    @Override
     protected void setRoots(List<Path> uploads) {
         final List<Path> normalized = new Collection<Path>();
         for(Path upload : uploads) {
             boolean duplicate = false;
-            for(Iterator<Path> iter = normalized.iterator(); iter.hasNext(); ) {
+            for(Iterator<Path> iter = normalized.iterator(); iter.hasNext();) {
                 Path n = iter.next();
                 if(upload.getLocal().isChild(n.getLocal())) {
                     // The selected file is a child of a directory already included
@@ -116,9 +114,10 @@ public class UploadTransfer extends Transfer {
      */
     private abstract class UploadTransferFilter extends TransferFilter {
         public boolean accept(final Path file) {
-            return UploadTransfer.this.exists(file.getLocal());
+            return file.getLocal().exists();
         }
 
+        @Override
         public void prepare(Path p) {
             if(p.attributes.isFile()) {
                 // Read file size
@@ -128,64 +127,50 @@ public class UploadTransfer extends Transfer {
                 }
             }
             if(p.attributes.isDirectory()) {
-                if(!UploadTransfer.this.exists(p)) {
-                    p.cache().put(p, new AttributedList<Path>(Collections.<Path>emptyList()));
+                if(!p.exists()) {
+                    p.cache().put(p, new AttributedList<Path>());
                 }
             }
         }
     }
 
-    /**
-     * A compiled representation of a regular expression.
-     */
-    private Pattern UPLOAD_SKIP_PATTERN = null;
-
-    {
-        try {
-            UPLOAD_SKIP_PATTERN = Pattern.compile(
-                    Preferences.instance().getProperty("queue.upload.skip.regex"));
-        }
-        catch(PatternSyntaxException e) {
-            log.warn(e.getMessage());
-        }
-    }
-
     private final PathFilter<Local> childFilter = new PathFilter<Local>() {
         public boolean accept(Local child) {
-            if(Preferences.instance().getBoolean("queue.upload.skip.enable")
-                    && UPLOAD_SKIP_PATTERN.matcher(child.getName()).matches()) {
-                return false;
+            try {
+                if(Preferences.instance().getBoolean("queue.upload.skip.enable")) {
+                    if(Pattern.compile(Preferences.instance().getProperty("queue.upload.skip.regex")).matcher(child.getName()).matches()) {
+                        return false;
+                    }
+                }
+            }
+            catch(PatternSyntaxException e) {
+                log.warn(e.getMessage());
             }
             return true;
         }
     };
 
-    private final Cache<Path> _cache = new Cache<Path>();
-
+    @Override
     public AttributedList<Path> childs(final Path parent) {
-        if(!this.exists(parent.getLocal())) {
+        if(!parent.getLocal().exists()) {
             // Cannot fetch file listing of non existant file
-            _cache.put(parent, new AttributedList<Path>(Collections.<Path>emptyList()));
+            return AttributedList.emptyList();
         }
-        if(!_cache.containsKey(parent)) {
-            AttributedList<Path> childs = new AttributedList<Path>();
-            for(AbstractPath local : parent.getLocal().childs(new NullComparator<Local>(),
-                    childFilter)) {
-                final Path child = PathFactory.createPath(parent.getSession(),
-                        parent.getAbsolute(),
-                        new Local(local.getAbsolute()));
-                child.getStatus().setSkipped(parent.getStatus().isSkipped());
-                childs.add(child);
+        final AttributedList<Path> childs = new AttributedList<Path>();
+        final Cache<Path> cache = this.getSession().cache();
+        for(AbstractPath local : parent.getLocal().childs(childFilter)) {
+            final Local download = LocalFactory.createLocal(local.getAbsolute());
+            Path upload = PathFactory.createPath(parent.getSession(), parent.getAbsolute(), download);
+            if(upload.exists()) {
+                upload = cache.lookup(upload.getReference());
+                upload.setLocal(download);
             }
-            _cache.put(parent, childs);
+            childs.add(upload);
         }
-        return _cache.get(parent);
+        return childs;
     }
 
-    public boolean isCached(Path file) {
-        return _cache.containsKey(file);
-    }
-
+    @Override
     public boolean isResumable() {
         if(this.getSession() instanceof S3Session) {
             return false;
@@ -194,18 +179,27 @@ public class UploadTransfer extends Transfer {
     }
 
     private final TransferFilter ACTION_OVERWRITE = new UploadTransferFilter() {
+        @Override
         public boolean accept(final Path p) {
             if(super.accept(p)) {
                 if(p.attributes.isDirectory()) {
                     // Do not attempt to create a directory that already exists
-                    return !UploadTransfer.this.exists(p);
+                    return !p.exists();
                 }
                 return true;
             }
             return false;
         }
 
+        @Override
         public void prepare(final Path p) {
+            if(p.exists()) {
+                if(p.attributes.getPermission() == null) {
+                    if(Preferences.instance().getBoolean("queue.upload.changePermissions")) {
+                        p.readPermission();
+                    }
+                }
+            }
             if(p.attributes.isFile()) {
                 p.getStatus().setResume(false);
             }
@@ -215,23 +209,25 @@ public class UploadTransfer extends Transfer {
     };
 
     private final TransferFilter ACTION_RESUME = new UploadTransferFilter() {
+        @Override
         public boolean accept(final Path p) {
             if(super.accept(p)) {
+                if(p.attributes.isDirectory()) {
+                    return !p.exists();
+                }
                 if(p.getStatus().isComplete() || p.getLocal().attributes.getSize() == p.attributes.getSize()) {
                     // No need to resume completed transfers
                     p.getStatus().setComplete(true);
                     return false;
-                }
-                if(p.attributes.isDirectory()) {
-                    return !UploadTransfer.this.exists(p);
                 }
                 return true;
             }
             return false;
         }
 
+        @Override
         public void prepare(final Path p) {
-            if(UploadTransfer.this.exists(p)) {
+            if(p.exists()) {
                 if(p.attributes.getSize() == -1) {
                     p.readSize();
                 }
@@ -248,7 +244,7 @@ public class UploadTransfer extends Transfer {
             }
             if(p.attributes.isFile()) {
                 // Append to file if size is not zero
-                final boolean resume = UploadTransfer.this.exists(p)
+                final boolean resume = p.exists()
                         && p.attributes.getSize() > 0;
                 p.getStatus().setResume(resume);
                 if(p.getStatus().isResume()) {
@@ -260,19 +256,21 @@ public class UploadTransfer extends Transfer {
     };
 
     private final TransferFilter ACTION_RENAME = new UploadTransferFilter() {
+        @Override
         public boolean accept(final Path p) {
             // Rename every file
             return super.accept(p);
         }
 
+        @Override
         public void prepare(final Path p) {
-            if(UploadTransfer.this.exists(p)) {
+            if(p.exists()) {
                 final String parent = p.getParent().getAbsolute();
                 final String filename = p.getName();
                 int no = 0;
                 while(p.exists()) { // Do not use cached value of exists!
                     no++;
-                    String proposal = FilenameUtils.getBaseName(filename)+ "-" + no;
+                    String proposal = FilenameUtils.getBaseName(filename) + "-" + no;
                     if(StringUtils.isNotBlank(FilenameUtils.getExtension(filename))) {
                         proposal += "." + FilenameUtils.getExtension(filename);
                     }
@@ -288,9 +286,10 @@ public class UploadTransfer extends Transfer {
     };
 
     private final TransferFilter ACTION_SKIP = new UploadTransferFilter() {
+        @Override
         public boolean accept(final Path p) {
             if(super.accept(p)) {
-                if(!UploadTransfer.this.exists(p)) {
+                if(!p.exists()) {
                     return true;
                 }
             }
@@ -298,6 +297,7 @@ public class UploadTransfer extends Transfer {
         }
     };
 
+    @Override
     public TransferFilter filter(final TransferAction action) {
         log.debug("filter:" + action);
         if(action.equals(TransferAction.ACTION_OVERWRITE)) {
@@ -314,9 +314,9 @@ public class UploadTransfer extends Transfer {
         }
         if(action.equals(TransferAction.ACTION_CALLBACK)) {
             for(Path root : this.getRoots()) {
-                if(this.exists(root)) {
+                if(root.exists()) {
                     if(root.getLocal().attributes.isDirectory()) {
-                        if(0 == root.childs().size()) {
+                        if(0 == this.childs(root).size()) {
                             // Do not prompt for existing empty directories
                             continue;
                         }
@@ -332,11 +332,7 @@ public class UploadTransfer extends Transfer {
         return super.filter(action);
     }
 
-    protected void clear(final TransferOptions options) {
-        _cache.clear();
-        super.clear(options);
-    }
-
+    @Override
     public TransferAction action(final boolean resumeRequested, final boolean reloadRequested) {
         log.debug("action:" + resumeRequested + "," + reloadRequested);
         if(resumeRequested) {
@@ -354,6 +350,7 @@ public class UploadTransfer extends Transfer {
         );
     }
 
+    @Override
     protected void _transferImpl(final Path p) {
         Permission permission = null;
         if(Preferences.instance().getBoolean("queue.upload.changePermissions")) {
@@ -375,19 +372,17 @@ public class UploadTransfer extends Transfer {
             }
         }
         p.upload(bandwidth, new AbstractStreamListener() {
+            @Override
             public void bytesSent(long bytes) {
                 transferred += bytes;
             }
         }, permission);
     }
 
+    @Override
     protected void fireTransferDidEnd() {
         if(this.isReset() && this.isComplete() && !this.isCanceled() && !(this.getTransferred() == 0)) {
-            CDMainApplication.invoke(new DefaultMainAction() {
-                public void run() {
-                    Growl.instance().notify("Upload complete", getName());
-                }
-            }, true);
+            Growl.instance().notify("Upload complete", getName());
         }
         super.fireTransferDidEnd();
     }

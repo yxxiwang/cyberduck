@@ -1,9 +1,27 @@
 package ch.cyberduck.core.sftp;
 
-import ch.ethz.ssh2.sftp.SFTPv3FileHandle;
+/*
+ * Copyright (c) 2009 David Kocher. All rights reserved.
+ * http://cyberduck.ch/
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * Bug fixes, suggestions and comments should be sent to:
+ * dkocher@cyberduck.ch
+ */
 
 import java.io.IOException;
 import java.io.OutputStream;
+
+import ch.ethz.ssh2.sftp.SFTPv3FileHandle;
 
 /**
  * @author David Kocher, dkocher@cyberduck.ch
@@ -39,6 +57,7 @@ public class SFTPOutputStream extends OutputStream
      *
      * @see ch.ethz.ssh2.sftp.SFTPv3Client#upload(SFTPv3FileHandle,long,byte[],int,int)
      */
+    @Override
     public void write(byte[] buffer, int offset, int len)
             throws IOException
     {
@@ -50,6 +69,7 @@ public class SFTPOutputStream extends OutputStream
         writeOffset += len;
     }
 
+    @Override
     public void write(int b)
             throws IOException
     {
@@ -66,6 +86,7 @@ public class SFTPOutputStream extends OutputStream
         return n;
     }
 
+    @Override
     public void close()
             throws IOException
     {

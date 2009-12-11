@@ -18,7 +18,7 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
+import ch.cyberduck.core.i18n.Locale;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
@@ -28,11 +28,6 @@ import org.apache.log4j.Logger;
  */
 public abstract class AbstractLoginController implements LoginController {
     private static Logger log = Logger.getLogger(AbstractLoginController.class);
-
-    /**
-     * Password already found in keychain
-     */
-    private boolean persisted;
 
     /**
      * Check the credentials for validity and prompt the user for the password if not found
@@ -64,48 +59,41 @@ public abstract class AbstractLoginController implements LoginController {
             return;
         }
         if(!credentials.isValid()) {
-            final String title = NSBundle.localizedString("Login with username and password", "Credentials", "");
+            final String title = Locale.localizedString("Login with username and password", "Credentials");
             if(StringUtils.isNotBlank(credentials.getUsername())) {
                 if(Preferences.instance().getBoolean("connection.login.useKeychain")) {
                     String passFromKeychain = this.find(host);
                     if(StringUtils.isBlank(passFromKeychain)) {
-                        reason.append(NSBundle.localizedString("No login credentials could be found in the Keychain", "Credentials", ""));
+                        reason.append(Locale.localizedString("No login credentials could be found in the Keychain", "Credentials"));
                         this.prompt(host, title, reason.toString());
                     }
                     else {
-                        persisted = true;
                         credentials.setPassword(passFromKeychain);
+                        credentials.setUseKeychain(false);
                     }
                 }
                 else {
-                    reason.append(NSBundle.localizedString("The use of the Keychain is disabled in the Preferences", "Credentials", ""));
+                    reason.append(Locale.localizedString("The use of the Keychain is disabled in the Preferences", "Credentials"));
                     this.prompt(host, title, reason.toString());
                 }
             }
             else {
-                reason.append(NSBundle.localizedString("No login credentials could be found in the Keychain", "Credentials", ""));
+                reason.append(Locale.localizedString("No login credentials could be found in the Keychain", "Credentials"));
                 this.prompt(host, title, reason.toString());
             }
         }
     }
 
     public void success(final Host host) {
-        if(persisted) {
-            log.info("Password already persisted in Keychain");
-            return;
-        }
         this.save(host);
     }
 
     public void fail(final Host host, final String reason) throws LoginCanceledException {
-        persisted = false;
-        this.prompt(host, NSBundle.localizedString("Login failed", "Credentials", ""), reason);
+        this.prompt(host, Locale.localizedString("Login failed", "Credentials"), reason);
     }
 
     /**
-     * @param protocol
-     * @param hostname
-     * @param port     Use 0 if the port does not matter
+     * @param host
      * @return the password fetched from the keychain or null if it was not found
      */
     public String find(final Host host) {
@@ -120,7 +108,7 @@ public abstract class AbstractLoginController implements LoginController {
             log.warn("No username given");
             return null;
         }
-        final String p = Keychain.instance().getInternetPasswordFromKeychain(host.getProtocol().getScheme(), host.getPort(),
+        final String p = KeychainFactory.instance().getPassword(host.getProtocol().getScheme(), host.getPort(),
                 host.getHostname(), host.getCredentials().getUsername());
         if(null == p) {
             if(log.isInfoEnabled()) {
@@ -159,8 +147,7 @@ public abstract class AbstractLoginController implements LoginController {
         if(log.isInfoEnabled()) {
             log.info("Add Password to Keychain:" + host);
         }
-        Keychain.instance().addInternetPasswordToKeychain(host.getProtocol().getScheme(), host.getPort(),
+        KeychainFactory.instance().addPassword(host.getProtocol().getScheme(), host.getPort(),
                 host.getHostname(), host.getCredentials().getUsername(), host.getCredentials().getPassword());
     }
-
 }

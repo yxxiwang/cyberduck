@@ -18,23 +18,23 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.*;
-import com.apple.cocoa.foundation.NSAttributedString;
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSDictionary;
-import com.apple.cocoa.foundation.NSSelector;
-
 import ch.cyberduck.core.*;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.core.io.BandwidthThrottle;
-import ch.cyberduck.ui.cocoa.delegate.MenuDelegate;
+import ch.cyberduck.core.threading.DefaultMainAction;
+import ch.cyberduck.ui.cocoa.application.*;
+import ch.cyberduck.ui.cocoa.delegate.AbstractMenuDelegate;
 import ch.cyberduck.ui.cocoa.delegate.TransferMenuDelegate;
-import ch.cyberduck.ui.cocoa.threading.DefaultMainAction;
+import ch.cyberduck.ui.cocoa.foundation.NSArray;
+import ch.cyberduck.ui.cocoa.foundation.NSAttributedString;
+import ch.cyberduck.ui.cocoa.foundation.NSDictionary;
 
 import org.apache.log4j.Logger;
+import org.rococoa.Foundation;
 
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.Date;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @version $Id$
@@ -69,12 +69,15 @@ public class CDProgressController extends CDBundleController {
 
     private TransferListener tl;
 
+    @Override
     protected void invalidate() {
-        this.transfer.getSession().removeProgressListener(pl);
-        this.transfer.removeListener(tl);
+        transfer.getSession().removeProgressListener(pl);
+        transfer.removeListener(tl);
+        filesPopup.menu().setDelegate(null);
         super.invalidate();
     }
 
+    @Override
     protected String getBundleName() {
         return "Progress.nib";
     }
@@ -84,7 +87,7 @@ public class CDProgressController extends CDBundleController {
         this.transfer.getSession().addProgressListener(this.pl = new ProgressListener() {
             public void message(final String message) {
                 messageText = message;
-                CDMainApplication.invoke(new DefaultMainAction() {
+                invoke(new DefaultMainAction() {
                     public void run() {
                         setMessageText();
                     }
@@ -95,17 +98,18 @@ public class CDProgressController extends CDBundleController {
             /**
              * Timer to update the progress indicator
              */
-            private Timer progressTimer;
+            private ScheduledFuture progressTimer;
 
-            final long delay = 0;
-            final long period = 500; //in milliseconds
+            final static long delay = 0;
+            final static long period = 500; //in milliseconds
 
+            @Override
             public void transferWillStart() {
-                progressBar.setIndeterminate(true);
-                progressBar.setHidden(false);
-                progressBar.startAnimation(null);
-                CDMainApplication.invoke(new DefaultMainAction() {
+                invoke(new DefaultMainAction() {
                     public void run() {
+                        progressBar.setHidden(false);
+                        progressBar.setIndeterminate(true);
+                        progressBar.startAnimation(null);
                         statusIconView.setImage(YELLOW_ICON);
                         setProgressText();
                         setStatusText();
@@ -113,10 +117,13 @@ public class CDProgressController extends CDBundleController {
                 });
             }
 
+            @Override
             public void transferDidEnd() {
-                progressBar.stopAnimation(null);
-                CDMainApplication.invoke(new DefaultMainAction() {
+                invoke(new DefaultMainAction() {
                     public void run() {
+                        progressBar.stopAnimation(null);
+                        progressBar.setIndeterminate(true);
+                        progressBar.setHidden(true);
                         messageText = null;
                         // Do not display any progress text when transfer is stopped
                         final Date timestamp = transfer.getTimestamp();
@@ -126,19 +133,18 @@ public class CDProgressController extends CDBundleController {
                         setMessageText();
                         setProgressText();
                         setStatusText();
-                        progressBar.setHidden(true);
                         statusIconView.setImage(transfer.isComplete() ? GREEN_ICON : RED_ICON);
                         filesPopup.itemAtIndex(0).setEnabled(transfer.getRoot().getLocal().exists());
                     }
-                }, true);
+                });
             }
 
+            @Override
             public void willTransferPath(final Path path) {
                 meter.reset();
-                progressTimer = new Timer();
-                progressTimer.scheduleAtFixedRate(new TimerTask() {
+                progressTimer = getTimerPool().scheduleAtFixedRate(new Runnable() {
                     public void run() {
-                        CDMainApplication.invoke(new DefaultMainAction() {
+                        invoke(new DefaultMainAction() {
                             public void run() {
                                 setProgressText();
                                 final double transferred = transfer.getTransferred();
@@ -150,14 +156,16 @@ public class CDProgressController extends CDBundleController {
                             }
                         });
                     }
-                }, delay, period);
+                }, delay, period, TimeUnit.MILLISECONDS);
             }
 
+            @Override
             public void didTransferPath(final Path path) {
-                progressTimer.cancel();
+                progressTimer.cancel(false);
                 meter.reset();
             }
 
+            @Override
             public void bandwidthChanged(BandwidthThrottle bandwidth) {
                 meter.reset();
             }
@@ -167,10 +175,13 @@ public class CDProgressController extends CDBundleController {
     /**
      * Resets both the progress and status field
      */
+    @Override
     public void awakeFromNib() {
         this.setProgressText();
         this.setMessageText();
         this.setStatusText();
+
+        super.awakeFromNib();
     }
 
     private void setMessageText() {
@@ -178,63 +189,63 @@ public class CDProgressController extends CDBundleController {
         if(messageText != null) {
             b.append(messageText);
         }
-        messageField.setAttributedStringValue(new NSAttributedString(b.toString(), TRUNCATE_MIDDLE_ATTRIBUTES));
+        messageField.setAttributedStringValue(NSAttributedString.attributedStringWithAttributes(b.toString(), TRUNCATE_MIDDLE_ATTRIBUTES));
     }
 
     private void setProgressText() {
-        progressField.setAttributedStringValue(new NSAttributedString(meter.getProgress(), TRUNCATE_MIDDLE_ATTRIBUTES));
+        progressField.setAttributedStringValue(NSAttributedString.attributedStringWithAttributes(meter.getProgress(), TRUNCATE_MIDDLE_ATTRIBUTES));
     }
 
     private void setStatusText() {
         StringBuffer b = new StringBuffer();
         if(!transfer.isRunning()) {
             if(transfer instanceof DownloadTransfer) {
-                b.append(transfer.isComplete() ? NSBundle.localizedString("Download complete", "Growl", "") :
-                        NSBundle.localizedString("Transfer incomplete", "Status", ""));
+                b.append(transfer.isComplete() ? Locale.localizedString("Download complete", "Growl") :
+                        Locale.localizedString("Transfer incomplete", "Status"));
             }
             if(transfer instanceof UploadTransfer) {
-                b.append(transfer.isComplete() ? NSBundle.localizedString("Upload complete", "Growl", "") :
-                        NSBundle.localizedString("Transfer incomplete", "Status", ""));
+                b.append(transfer.isComplete() ? Locale.localizedString("Upload complete", "Growl") :
+                        Locale.localizedString("Transfer incomplete", "Status"));
             }
             if(transfer instanceof SyncTransfer) {
-                b.append(transfer.isComplete() ? NSBundle.localizedString("Synchronization complete", "Growl", "") :
-                        NSBundle.localizedString("Transfer incomplete", "Status", ""));
+                b.append(transfer.isComplete() ? Locale.localizedString("Synchronization complete", "Growl") :
+                        Locale.localizedString("Transfer incomplete", "Status"));
             }
         }
-        statusField.setAttributedStringValue(new NSAttributedString(
+        statusField.setAttributedStringValue(NSAttributedString.attributedStringWithAttributes(
                 b.toString(),
                 TRUNCATE_MIDDLE_ATTRIBUTES));
     }
 
-    private static final NSDictionary NORMAL_FONT_ATTRIBUTES = new NSDictionary(
-            new Object[]{
+    private static final NSDictionary NORMAL_FONT_ATTRIBUTES = NSDictionary.dictionaryWithObjectsForKeys(
+            NSArray.arrayWithObjects(
                     NSFont.systemFontOfSize(NSFont.smallSystemFontSize()),
-                    CDTableCellAttributes.PARAGRAPH_STYLE_LEFT_ALIGNMENT_TRUNCATE_TAIL},
-            new Object[]{
+                    CDTableCellAttributes.PARAGRAPH_STYLE_LEFT_ALIGNMENT_TRUNCATE_TAIL),
+            NSArray.arrayWithObjects(
                     NSAttributedString.FontAttributeName,
-                    NSAttributedString.ParagraphStyleAttributeName}
+                    NSAttributedString.ParagraphStyleAttributeName)
     );
 
-    private static final NSDictionary HIGHLIGHTED_FONT_ATTRIBUTES = new NSDictionary(
-            new Object[]{
+    private static final NSDictionary HIGHLIGHTED_FONT_ATTRIBUTES = NSDictionary.dictionaryWithObjectsForKeys(
+            NSArray.arrayWithObjects(
                     NSFont.systemFontOfSize(NSFont.smallSystemFontSize()),
                     NSColor.whiteColor(),
-                    CDTableCellAttributes.PARAGRAPH_STYLE_LEFT_ALIGNMENT_TRUNCATE_TAIL},
-            new Object[]{
+                    CDTableCellAttributes.PARAGRAPH_STYLE_LEFT_ALIGNMENT_TRUNCATE_TAIL),
+            NSArray.arrayWithObjects(
                     NSAttributedString.FontAttributeName,
                     NSAttributedString.ForegroundColorAttributeName,
-                    NSAttributedString.ParagraphStyleAttributeName}
+                    NSAttributedString.ParagraphStyleAttributeName)
     );
 
-    private static final NSDictionary DARK_FONT_ATTRIBUTES = new NSDictionary(
-            new Object[]{
+    private static final NSDictionary DARK_FONT_ATTRIBUTES = NSDictionary.dictionaryWithObjectsForKeys(
+            NSArray.arrayWithObjects(
                     NSFont.systemFontOfSize(NSFont.smallSystemFontSize()),
                     NSColor.darkGrayColor(),
-                    CDTableCellAttributes.PARAGRAPH_STYLE_LEFT_ALIGNMENT_TRUNCATE_TAIL},
-            new Object[]{
+                    CDTableCellAttributes.PARAGRAPH_STYLE_LEFT_ALIGNMENT_TRUNCATE_TAIL),
+            NSArray.arrayWithObjects(
                     NSAttributedString.FontAttributeName,
                     NSAttributedString.ForegroundColorAttributeName,
-                    NSAttributedString.ParagraphStyleAttributeName}
+                    NSAttributedString.ParagraphStyleAttributeName)
     );
 
     public void setHighlighted(final boolean highlighted) {
@@ -243,13 +254,13 @@ public class CDProgressController extends CDBundleController {
         messageField.setTextColor(highlighted ? NSColor.whiteColor() : NSColor.darkGrayColor());
         if(transfer.getRoot().getLocal().exists()) {
             filesPopup.itemAtIndex(0).setAttributedTitle(
-                    new NSAttributedString(filesPopup.itemAtIndex(0).title(),
+                    NSAttributedString.attributedStringWithAttributes(filesPopup.itemAtIndex(0).title(),
                             highlighted ? HIGHLIGHTED_FONT_ATTRIBUTES : NORMAL_FONT_ATTRIBUTES)
             );
         }
         else {
             filesPopup.itemAtIndex(0).setAttributedTitle(
-                    new NSAttributedString(filesPopup.itemAtIndex(0).title(),
+                    NSAttributedString.attributedStringWithAttributes(filesPopup.itemAtIndex(0).title(),
                             highlighted ? HIGHLIGHTED_FONT_ATTRIBUTES : DARK_FONT_ATTRIBUTES)
             );
         }
@@ -259,30 +270,28 @@ public class CDProgressController extends CDBundleController {
     // Outlets
     // ----------------------------------------------------------
 
-    private NSPopUpButton filesPopup; // IBOutlet
+    @Outlet
+    private NSPopUpButton filesPopup;
 
-    private MenuDelegate filesPopupMenuDelegate;
+    private AbstractMenuDelegate filesPopupMenuDelegate;
 
     public void setFilesPopup(NSPopUpButton filesPopup) {
         this.filesPopup = filesPopup;
-        this.filesPopup.setTarget(this);
+        this.filesPopup.setTarget(this.id());
         this.filesPopup.removeAllItems();
         {
             Path path = transfer.getRoot();
-            NSMenuItem item = new NSMenuItem();
-            item.setTitle(path.getName());
-            item.setAction(new NSSelector("reveal", new Class[]{NSMenuItem.class}));
-            item.setRepresentedObject(path);
+            NSMenuItem item = this.filesPopup.menu().addItemWithTitle_action_keyEquivalent(path.getName(), Foundation.selector("reveal:"), "");
+            item.setRepresentedObject(path.getAbsolute());
             item.setImage(CDIconCache.instance().iconForPath(path, 16));
             item.setEnabled(path.getLocal().exists());
-            this.filesPopup.menu().addItem(item);
         }
-        this.filesPopup.menu().setDelegate(filesPopupMenuDelegate
-                = new TransferMenuDelegate(transfer.getRoots())
-        );
+        this.filesPopupMenuDelegate = new TransferMenuDelegate(transfer.getRoots());
+        this.filesPopup.menu().setDelegate(this.filesPopupMenuDelegate.id());
     }
 
-    private NSTextField progressField; // IBOutlet
+    @Outlet
+    private NSTextField progressField;
 
     public void setProgressField(final NSTextField progressField) {
         this.progressField = progressField;
@@ -291,7 +300,8 @@ public class CDProgressController extends CDBundleController {
         this.progressField.setTextColor(NSColor.darkGrayColor());
     }
 
-    private NSTextField statusField; // IBOutlet
+    @Outlet
+    private NSTextField statusField;
 
     public void setStatusField(final NSTextField statusField) {
         this.statusField = statusField;
@@ -300,7 +310,8 @@ public class CDProgressController extends CDBundleController {
         this.statusField.setTextColor(NSColor.darkGrayColor());
     }
 
-    private NSTextField messageField; // IBOutlet
+    @Outlet
+    private NSTextField messageField;
 
     public void setMessageField(final NSTextField messageField) {
         this.messageField = messageField;
@@ -309,53 +320,56 @@ public class CDProgressController extends CDBundleController {
         this.messageField.setTextColor(NSColor.darkGrayColor());
     }
 
-    private NSProgressIndicator progressBar; // IBOutlet
+    @Outlet
+    private NSProgressIndicator progressBar;
 
     public void setProgressBar(final NSProgressIndicator progressBar) {
         this.progressBar = progressBar;
         this.progressBar.setDisplayedWhenStopped(false);
         this.progressBar.setUsesThreadedAnimation(true);
-        this.progressBar.setControlTint(NSProgressIndicator.BlueControlTint);
-        this.progressBar.setControlSize(NSProgressIndicator.SmallControlSize);
-        this.progressBar.setStyle(NSProgressIndicator.ProgressIndicatorBarStyle);
+        this.progressBar.setControlSize(NSCell.NSSmallControlSize);
+        this.progressBar.setStyle(NSProgressIndicator.NSProgressIndicatorBarStyle);
         this.progressBar.setMinValue(0);
     }
 
-    private NSImageView statusIconView; //IBOutlet
+    @Outlet
+    private NSImageView statusIconView;
 
-    private static final NSImage RED_ICON = NSImage.imageNamed("statusRed.tiff");
-    private static final NSImage GREEN_ICON = NSImage.imageNamed("statusGreen.tiff");
-    private static final NSImage YELLOW_ICON = NSImage.imageNamed("statusYellow.tiff");
+    private static final NSImage RED_ICON = CDIconCache.iconNamed("statusRed.tiff");
+    private static final NSImage GREEN_ICON = CDIconCache.iconNamed("statusGreen.tiff");
+    private static final NSImage YELLOW_ICON = CDIconCache.iconNamed("statusYellow.tiff");
 
     public void setStatusIconView(final NSImageView statusIconView) {
         this.statusIconView = statusIconView;
         this.statusIconView.setImage(transfer.isComplete() ? GREEN_ICON : RED_ICON);
     }
 
-    private NSImageView iconImageView; //IBOutlet
+    @Outlet
+    private NSImageView iconImageView;
 
     public void setIconImageView(final NSImageView iconImageView) {
         this.iconImageView = iconImageView;
         if(transfer instanceof DownloadTransfer) {
-            iconImageView.setImage(CDIconCache.instance().iconForName("arrowDown", 32));
+            iconImageView.setImage(CDIconCache.iconNamed("arrowDown", 32));
         }
         else if(transfer instanceof UploadTransfer) {
-            iconImageView.setImage(CDIconCache.instance().iconForName("arrowUp", 32));
+            iconImageView.setImage(CDIconCache.iconNamed("arrowUp", 32));
         }
         else if(transfer instanceof SyncTransfer) {
-            iconImageView.setImage(CDIconCache.instance().iconForName("sync", 32));
+            iconImageView.setImage(CDIconCache.iconNamed("sync", 32));
         }
     }
 
     /**
      * The view drawn in the table cell
      */
-    private NSView progressView; // IBOutlet
+    private NSView progressView;
 
     public void setProgressView(final NSView v) {
         this.progressView = v;
     }
 
+    @Override
     public NSView view() {
         return this.progressView;
     }

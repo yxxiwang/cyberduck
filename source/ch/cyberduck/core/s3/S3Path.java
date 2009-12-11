@@ -18,15 +18,14 @@ package ch.cyberduck.core.s3;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSDictionary;
-
 import ch.cyberduck.core.*;
 import ch.cyberduck.core.cloud.CloudPath;
 import ch.cyberduck.core.cloud.Distribution;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.core.io.BandwidthThrottle;
 
 import org.apache.commons.lang.StringUtils;
+import org.apache.commons.io.IOUtils;
 import org.apache.log4j.Logger;
 import org.jets3t.service.CloudFrontServiceException;
 import org.jets3t.service.S3ObjectsChunk;
@@ -64,21 +63,25 @@ public class S3Path extends CloudPath {
         PathFactory.addFactory(Protocol.S3, new Factory());
     }
 
-    private static class Factory extends PathFactory {
-        protected Path create(Session session, String path, int type) {
-            return new S3Path((S3Session) session, path, type);
+    private static class Factory extends PathFactory<S3Session> {
+        @Override
+        protected Path create(S3Session session, String path, int type) {
+            return new S3Path(session, path, type);
         }
 
-        protected Path create(Session session, String parent, String name, int type) {
-            return new S3Path((S3Session) session, parent, name, type);
+        @Override
+        protected Path create(S3Session session, String parent, String name, int type) {
+            return new S3Path(session, parent, name, type);
         }
 
-        protected Path create(Session session, String path, Local file) {
-            return new S3Path((S3Session) session, path, file);
+        @Override
+        protected Path create(S3Session session, String path, Local file) {
+            return new S3Path(session, path, file);
         }
 
-        protected Path create(Session session, NSDictionary dict) {
-            return new S3Path((S3Session) session, dict);
+        @Override
+        protected <T> Path create(S3Session session, T dict) {
+            return new S3Path(session, dict);
         }
     }
 
@@ -99,20 +102,23 @@ public class S3Path extends CloudPath {
         this.session = s;
     }
 
-    protected S3Path(S3Session s, NSDictionary dict) {
+    protected <T> S3Path(S3Session s, T dict) {
         super(dict);
         this.session = s;
     }
 
+    @Override
     public Session getSession() {
         return this.session;
     }
 
     private Status status;
 
+    @Override
     public Status getStatus() {
         if(null == status) {
             status = new Status() {
+                @Override
                 public void setCanceled() {
                     super.setCanceled();
                     if(null == cancelTrigger) {
@@ -126,6 +132,7 @@ public class S3Path extends CloudPath {
         return status;
     }
 
+    @Override
     public boolean exists() {
         if(attributes.isDirectory()) {
             if(this.isContainer()) {
@@ -229,7 +236,7 @@ public class S3Path extends CloudPath {
      * Expires: Thu, 01 Dec 1994 16:00:00 GMT
      */
     private SimpleDateFormat rfc1123 =
-            new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.ENGLISH);
+            new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", java.util.Locale.ENGLISH);
 
     {
         rfc1123.setTimeZone(TimeZone.getDefault());
@@ -292,7 +299,6 @@ public class S3Path extends CloudPath {
 
     /**
      * @param enabled
-     * @throws S3Exception
      */
     public void setLogging(final boolean enabled) {
         // Logging target bucket
@@ -385,17 +391,15 @@ public class S3Path extends CloudPath {
         return false;
     }
 
+    @Override
     public void readSize() {
         if(attributes.isFile()) {
             try {
                 session.check();
-                session.message(MessageFormat.format(NSBundle.localizedString("Getting size of {0}", "Status", ""),
+                session.message(MessageFormat.format(Locale.localizedString("Getting size of {0}", "Status"),
                         this.getName()));
 
                 final S3Object details = this.getDetails();
-                if(null == details) {
-                    return;
-                }
                 attributes.setSize(details.getContentLength());
             }
             catch(S3ServiceException e) {
@@ -407,17 +411,15 @@ public class S3Path extends CloudPath {
         }
     }
 
+    @Override
     public void readTimestamp() {
         if(attributes.isFile()) {
             try {
                 session.check();
-                session.message(MessageFormat.format(NSBundle.localizedString("Getting timestamp of {0}", "Status", ""),
+                session.message(MessageFormat.format(Locale.localizedString("Getting timestamp of {0}", "Status"),
                         this.getName()));
 
                 final S3Object details = this.getDetails();
-                if(null == details) {
-                    return;
-                }
                 attributes.setModificationDate(details.getLastModifiedDate().getTime());
             }
             catch(S3ServiceException e) {
@@ -439,10 +441,11 @@ public class S3Path extends CloudPath {
         DEFAULT_FOLDER_PERMISSION = new Permission(access);
     }
 
+    @Override
     public void readPermission() {
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Getting permission of {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Getting permission of {0}", "Status"),
                     this.getName()));
             AccessControlList acl = null;
             if(this.isContainer()) {
@@ -454,9 +457,6 @@ public class S3Path extends CloudPath {
             if(null == acl) {
                 if(attributes.isDirectory()) {
                     attributes.setPermission(DEFAULT_FOLDER_PERMISSION);
-                }
-                else {
-                    attributes.setPermission(Permission.EMPTY);
                 }
             }
             else {
@@ -475,10 +475,9 @@ public class S3Path extends CloudPath {
      * @param grants
      * @return
      */
-    private Permission readPermissions(Set grants) throws IOException, S3ServiceException {
+    private Permission readPermissions(Set<GrantAndPermission> grants) throws IOException, S3ServiceException {
         boolean[][] p = new boolean[3][3];
-        for(Iterator iter = grants.iterator(); iter.hasNext();) {
-            GrantAndPermission grant = (GrantAndPermission) iter.next();
+        for(GrantAndPermission grant : grants) {
             final org.jets3t.service.acl.Permission access = grant.getPermission();
             if(grant.getGrantee().equals(GroupGrantee.ALL_USERS)) {
                 if(access.equals(org.jets3t.service.acl.Permission.PERMISSION_READ)
@@ -540,6 +539,7 @@ public class S3Path extends CloudPath {
 //            }
 //        }
 
+        @Override
         public void s3ServiceEventPerformed(CreateObjectsEvent event) {
             super.s3ServiceEventPerformed(event);
 
@@ -566,6 +566,7 @@ public class S3Path extends CloudPath {
         }
     }
 
+    @Override
     public void download(BandwidthThrottle throttle, final StreamListener listener, final boolean check) {
         if(attributes.isFile()) {
             OutputStream out = null;
@@ -574,7 +575,7 @@ public class S3Path extends CloudPath {
                 if(check) {
                     session.check();
                 }
-                this.getSession().message(MessageFormat.format(NSBundle.localizedString("Downloading {0}", "Status", ""),
+                this.getSession().message(MessageFormat.format(Locale.localizedString("Downloading {0}", "Status"),
                         this.getName()));
 
                 final S3Bucket bucket = this.getBucket();
@@ -606,17 +607,8 @@ public class S3Path extends CloudPath {
                 this.error("Download failed", e);
             }
             finally {
-                try {
-                    if(in != null) {
-                        in.close();
-                    }
-                    if(out != null) {
-                        out.close();
-                    }
-                }
-                catch(IOException e) {
-                    log.error(e.getMessage());
-                }
+                IOUtils.closeQuietly(in);
+                IOUtils.closeQuietly(out);
             }
         }
         if(attributes.isDirectory()) {
@@ -624,6 +616,7 @@ public class S3Path extends CloudPath {
         }
     }
 
+    @Override
     public void upload(BandwidthThrottle throttle, final StreamListener listener, final Permission p, final boolean check) {
         try {
             if(check) {
@@ -633,7 +626,7 @@ public class S3Path extends CloudPath {
                 final S3ServiceMulti multi = new S3ServiceMulti(session.S3,
                         new S3ServiceTransferEventAdaptor(listener)
                 );
-                this.getSession().message(MessageFormat.format(NSBundle.localizedString("Compute MD5 hash of {0}", "Status", ""),
+                this.getSession().message(MessageFormat.format(Locale.localizedString("Compute MD5 hash of {0}", "Status"),
                         this.getName()));
 
                 final S3Object object;
@@ -662,7 +655,7 @@ public class S3Path extends CloudPath {
 
                 // Transfer
                 final S3Bucket bucket = this.getBucket();
-                this.getSession().message(MessageFormat.format(NSBundle.localizedString("Uploading {0}", "Status", ""),
+                this.getSession().message(MessageFormat.format(Locale.localizedString("Uploading {0}", "Status"),
                         this.getName()));
 
                 multi.putObjects(bucket, new S3Object[]{object});
@@ -678,11 +671,12 @@ public class S3Path extends CloudPath {
 
     private static final int BUCKET_LIST_CHUNKING_SIZE = 1000;
 
+    @Override
     public AttributedList<Path> list() {
         final AttributedList<Path> childs = new AttributedList<Path>();
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Listing directory {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Listing directory {0}", "Status"),
                     this.getName()));
 
             if(this.isRoot()) {
@@ -779,8 +773,10 @@ public class S3Path extends CloudPath {
                 }
                 while(priorLastKey != null && !getStatus().isCanceled());
             }
+            session.setWorkdir(this);
         }
         catch(S3ServiceException e) {
+            childs.attributes().setReadable(false);
             this.error(e.getS3ErrorMessage(), e);
         }
         catch(IOException e) {
@@ -795,11 +791,12 @@ public class S3Path extends CloudPath {
      */
     private final static String MIMETYPE_DIRECTORY = "application/x-directory";
 
+    @Override
     public void mkdir() {
         log.debug("mkdir:" + this.getName());
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Making directory {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Making directory {0}", "Status"),
                     this.getName()));
 
             if(this.isContainer()) {
@@ -809,6 +806,7 @@ public class S3Path extends CloudPath {
                     return;
                 }
                 session.S3.createBucket(this.getName(), Preferences.instance().getProperty("s3.location"));
+                session.getBuckets(true);
             }
             else {
                 final S3Bucket bucket = this.getBucket();
@@ -828,15 +826,17 @@ public class S3Path extends CloudPath {
         }
     }
 
+    @Override
     public void mkdir(boolean recursive) {
         this.mkdir();
     }
 
+    @Override
     public void writePermissions(Permission perm, boolean recursive) {
         log.debug("writePermissions:" + perm);
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Changing permission of {0} to {1}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Changing permission of {0} to {1}", "Status"),
                     this.getName(), perm.getOctalString()));
 
             AccessControlList acl = null;
@@ -882,6 +882,7 @@ public class S3Path extends CloudPath {
                     }
                 }
             }
+            attributes.setPermission(perm);
         }
         catch(S3ServiceException e) {
             this.error(e.getS3ErrorMessage(), e);
@@ -891,12 +892,13 @@ public class S3Path extends CloudPath {
         }
     }
 
+    @Override
     public void delete() {
         log.debug("delete:" + this.toString());
         try {
             session.check();
             if(attributes.isFile()) {
-                session.message(MessageFormat.format(NSBundle.localizedString("Deleting {0}", "Status", ""),
+                session.message(MessageFormat.format(Locale.localizedString("Deleting {0}", "Status"),
                         this.getName()));
 
                 session.S3.deleteObject(this.getContainerName(), this.getKey());
@@ -929,11 +931,17 @@ public class S3Path extends CloudPath {
         }
     }
 
+    public boolean isRenameSupported() {
+        // Renaming buckets is not currently supported by S3
+        return !attributes.isVolume();
+    }
+
+    @Override
     public void rename(AbstractPath renamed) {
         try {
             if(attributes.isFile()) {
                 session.check();
-                session.message(MessageFormat.format(NSBundle.localizedString("Renaming {0} to {1}", "Status", ""),
+                session.message(MessageFormat.format(Locale.localizedString("Renaming {0} to {1}", "Status"),
                         this.getName(), renamed));
 
                 session.S3.moveObject(this.getContainerName(), this.getKey(), this.getContainerName(),
@@ -942,6 +950,9 @@ public class S3Path extends CloudPath {
                 if(!this.getContainerName().equals(((S3Path) renamed).getContainerName())) {
                     _bucket = null;
                 }
+            }
+            else if(attributes.isVolume()) {
+                // Renaming buckets is not currently supported by S3
             }
             else if(attributes.isDirectory()) {
                 for(AbstractPath i : this.childs()) {
@@ -961,11 +972,12 @@ public class S3Path extends CloudPath {
         }
     }
 
+    @Override
     public void copy(AbstractPath copy) {
         try {
             if(attributes.isFile()) {
                 session.check();
-                session.message(MessageFormat.format(NSBundle.localizedString("Copying {0} to {1}", "Status", ""),
+                session.message(MessageFormat.format(Locale.localizedString("Copying {0} to {1}", "Status"),
                         this.getName(), copy));
 
                 session.S3.copyObject(this.getContainerName(), this.getKey(), ((S3Path) copy).getContainerName(),
@@ -989,6 +1001,7 @@ public class S3Path extends CloudPath {
         }
     }
 
+    @Override
     public String toHttpURL() {
         return this.toURL();
     }
@@ -998,6 +1011,7 @@ public class S3Path extends CloudPath {
      *
      * @return
      */
+    @Override
     public String toURL() {
         if(Preferences.instance().getBoolean("s3.url.public")) {
             return this.createSignedUrl();
@@ -1050,80 +1064,5 @@ public class S3Path extends CloudPath {
      */
     public String createTorrentUrl() {
         return S3Service.createTorrentUrl(this.getContainerName(), this.getKey());
-    }
-
-    /**
-     * @return
-     */
-    public Distribution readDistribution() {
-        if(this.getHost().getCredentials().isAnonymousLogin()) {
-            return new Distribution(false, null, null);
-        }
-        try {
-            session.check();
-            for(org.jets3t.service.model.cloudfront.Distribution d : session.listDistributions(this.getContainerName())) {
-                // Retrieve distribution's configuration to access current logging status settings.
-                final DistributionConfig distributionConfig = session.getDistributionConfig(d);
-                // We currently only support one distribution per bucket
-                return new Distribution(d.isEnabled(), d.getStatus().equals("InProgress"),
-                        "http://" + d.getDomainName(), NSBundle.localizedString(d.getStatus(), "S3", ""), d.getCNAMEs(),
-                        distributionConfig.isLoggingEnabled());
-            }
-        }
-        catch(CloudFrontServiceException e) {
-            if(e.getResponseCode() == 403) {
-                log.warn("Invalid CloudFront account:" + e.getMessage());
-                return new Distribution(false, null, null);
-            }
-            this.error("Cannot read file attributes", e);
-        }
-        catch(IOException e) {
-            this.error("Cannot read file attributes", e);
-        }
-        return new Distribution(false, null, null);
-    }
-
-    /**
-     * Amazon CloudFront Extension
-     *
-     * @param enabled
-     * @param cnames
-     * @param logging
-     */
-    public void writeDistribution(final boolean enabled, final String[] cnames, boolean logging) {
-        final String container = this.getContainerName();
-        if(this.getHost().getCredentials().isAnonymousLogin()) {
-            return;
-        }
-        try {
-            LoggingStatus l = null;
-            if(logging) {
-                l = new LoggingStatus(
-                        session.getHostnameForBucket(this.getContainerName()),
-                        Preferences.instance().getProperty("cloudfront.logging.prefix"));
-            }
-            session.check();
-            if(enabled) {
-                session.message(MessageFormat.format(NSBundle.localizedString("Enable {0} Distribution", "Status", ""),
-                        NSBundle.localizedString("Amazon CloudFront", "S3", "")));
-            }
-            else {
-                session.message(MessageFormat.format(NSBundle.localizedString("Disable {0} Distribution", "Status", ""),
-                        NSBundle.localizedString("Amazon CloudFront", "S3", "")));
-            }
-            for(org.jets3t.service.model.cloudfront.Distribution distribution : session.listDistributions(container)) {
-                session.updateDistribution(enabled, distribution, cnames, l);
-                // We currently only support one distribution per bucket
-                return;
-            }
-            // Create new configuration
-            session.createDistribution(enabled, container, cnames, l);
-        }
-        catch(CloudFrontServiceException e) {
-            this.error("Cannot write file attributes", e);
-        }
-        catch(IOException e) {
-            this.error("Cannot write file attributes", e);
-        }
     }
 }

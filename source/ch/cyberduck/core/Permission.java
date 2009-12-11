@@ -18,15 +18,17 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSDictionary;
-import com.apple.cocoa.foundation.NSMutableDictionary;
+import ch.cyberduck.core.serializer.Deserializer;
+import ch.cyberduck.core.serializer.DeserializerFactory;
+import ch.cyberduck.core.serializer.Serializer;
+import ch.cyberduck.core.serializer.SerializerFactory;
 
 import org.apache.log4j.Logger;
 
 import java.util.Arrays;
 
 /**
- * Encapsulating unix file permissions.
+ * Encapsulating UNIX file permissions.
  *
  * @version $Id$
  */
@@ -38,18 +40,22 @@ public class Permission implements Serializable {
     public static final Permission EMPTY
             = new Permission(EMPTY_MASK);
 
-    public Permission(NSDictionary dict) {
+    public <T> Permission(T dict) {
         this.init(dict);
     }
 
-    public void init(NSDictionary dict) {
-        this.init(dict.objectForKey("Mask").toString());
+    public <T> void init(T serialized) {
+        final Deserializer dict = DeserializerFactory.createDeserializer(serialized);
+        final String maskObj = dict.stringForKey("Mask");
+        if(maskObj != null) {
+            this.init(maskObj);
+        }
     }
 
-    public NSDictionary getAsDictionary() {
-        NSMutableDictionary dict = new NSMutableDictionary();
-        dict.setObjectForKey(this.getMask(), "Mask");
-        return dict;
+    public <T> T getAsDictionary() {
+        final Serializer dict = SerializerFactory.createSerializer();
+        dict.setStringForKey(this.getMask(), "Mask");
+        return dict.<T>getSerialized();
     }
 
     /**
@@ -93,6 +99,7 @@ public class Permission implements Serializable {
 
     /**
      * Copy
+     *
      * @param p
      */
     public Permission(Permission p) {
@@ -108,12 +115,11 @@ public class Permission implements Serializable {
     }
 
     /**
-     *
      * @param mask
      */
     private void init(String mask) {
-        if (mask.length() != 9) {
-            log.error("Invalid mask:"+mask);
+        if(mask.length() != 9) {
+            log.error("Invalid mask:" + mask);
             throw new NumberFormatException("Must be a nine digit string");
         }
         this.owner = this.getOwnerPermissions(mask);
@@ -131,7 +137,6 @@ public class Permission implements Serializable {
     }
 
     /**
-     *
      * @param p
      */
     private void init(boolean[][] p) {
@@ -156,20 +161,20 @@ public class Permission implements Serializable {
         String octalString = String.valueOf(octal);
         StringBuffer sb = new StringBuffer();
         int leadingZeros = 3 - octalString.length();
-        while (leadingZeros > 0) {
+        while(leadingZeros > 0) {
             sb.append('0');
             leadingZeros--;
         }
         sb.append(octalString);
         octalString = sb.toString();
 
-		log.debug("Permission(octalString):"+octalString);
+        log.debug("Permission(octalString):" + octalString);
 
-        if (octalString.length() != 3) {
-            log.error("Invalid octal value:"+octal);
+        if(octalString.length() != 3) {
+            log.error("Invalid octal value:" + octal);
             throw new NumberFormatException("Must be a three digit number");
         }
-        switch (Integer.parseInt(octalString.substring(0, 1))) {
+        switch(Integer.parseInt(octalString.substring(0, 1))) {
             case (0):
                 this.owner = new boolean[]{false, false, false};
                 break;
@@ -195,7 +200,7 @@ public class Permission implements Serializable {
                 this.owner = new boolean[]{true, true, true};
                 break;
         }
-        switch (Integer.parseInt(octalString.substring(1, 2))) {
+        switch(Integer.parseInt(octalString.substring(1, 2))) {
             case (0):
                 this.group = new boolean[]{false, false, false};
                 break;
@@ -221,7 +226,7 @@ public class Permission implements Serializable {
                 this.group = new boolean[]{true, true, true};
                 break;
         }
-        switch (Integer.parseInt(octalString.substring(2, 3))) {
+        switch(Integer.parseInt(octalString.substring(2, 3))) {
             case (0):
                 this.other = new boolean[]{false, false, false};
                 break;
@@ -305,6 +310,7 @@ public class Permission implements Serializable {
     /**
      * @return i.e. rwxrwxrwx (777)
      */
+    @Override
     public String toString() {
         return this.getMask() + " (" + this.getOctalString() + ")";
     }
@@ -337,39 +343,38 @@ public class Permission implements Serializable {
     }
 
     /**
-     * @return
-     *	0 = no permissions whatsoever; this person cannot read, write, or execute the file
-     *	1 = execute only
-     *	2 = write only
-     *	3 = write and execute (1+2)
-     *	4 = read only
-     *	5 = read and execute (4+1)
-     *	6 = read and write (4+2)
-     *	7 = read and write and execute (4+2+1)
+     * @return 0 = no permissions whatsoever; this person cannot read, write, or execute the file
+     *         1 = execute only
+     *         2 = write only
+     *         3 = write and execute (1+2)
+     *         4 = read only
+     *         5 = read and execute (4+1)
+     *         6 = read and write (4+2)
+     *         7 = read and write and execute (4+2+1)
      */
     private int getOctalAccessNumber(boolean[] permissions) {
-        if (Arrays.equals(permissions, new boolean[]{false, false, false})) {
+        if(Arrays.equals(permissions, new boolean[]{false, false, false})) {
             return 0;
         }
-        if (Arrays.equals(permissions, new boolean[]{false, false, true})) {
+        if(Arrays.equals(permissions, new boolean[]{false, false, true})) {
             return 1;
         }
-        if (Arrays.equals(permissions, new boolean[]{false, true, false})) {
+        if(Arrays.equals(permissions, new boolean[]{false, true, false})) {
             return 2;
         }
-        if (Arrays.equals(permissions, new boolean[]{false, true, true})) {
+        if(Arrays.equals(permissions, new boolean[]{false, true, true})) {
             return 3;
         }
-        if (Arrays.equals(permissions, new boolean[]{true, false, false})) {
+        if(Arrays.equals(permissions, new boolean[]{true, false, false})) {
             return 4;
         }
-        if (Arrays.equals(permissions, new boolean[]{true, false, true})) {
+        if(Arrays.equals(permissions, new boolean[]{true, false, true})) {
             return 5;
         }
-        if (Arrays.equals(permissions, new boolean[]{true, true, false})) {
+        if(Arrays.equals(permissions, new boolean[]{true, true, false})) {
             return 6;
         }
-        if (Arrays.equals(permissions, new boolean[]{true, true, true})) {
+        if(Arrays.equals(permissions, new boolean[]{true, true, true})) {
             return 7;
         }
         return -1;
@@ -387,7 +392,7 @@ public class Permission implements Serializable {
     }
 
     public boolean equals(Object o) {
-        if ((o != null) && (o instanceof Permission)) {
+        if((o != null) && (o instanceof Permission)) {
             Permission other = (Permission) o;
             return this.getOctalNumber() == other.getOctalNumber();
         }

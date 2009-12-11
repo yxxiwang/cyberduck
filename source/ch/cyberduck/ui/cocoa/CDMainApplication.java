@@ -18,98 +18,86 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSApplication;
-import com.apple.cocoa.application.NSEvent;
-import com.apple.cocoa.foundation.NSMutableDictionary;
-import com.apple.cocoa.foundation.NSPoint;
+import ch.cyberduck.core.Keychain;
+import ch.cyberduck.core.Preferences;
+import ch.cyberduck.core.SystemConfigurationProxy;
+import ch.cyberduck.core.SystemConfigurationReachability;
+import ch.cyberduck.ui.cocoa.application.NSApplication;
+import ch.cyberduck.ui.cocoa.foundation.NSAutoreleasePool;
+import ch.cyberduck.ui.cocoa.foundation.NSGarbageCollector;
+import ch.cyberduck.ui.cocoa.i18n.BundleLocale;
+import ch.cyberduck.ui.cocoa.model.FinderLocal;
+import ch.cyberduck.ui.cocoa.quicklook.DeprecatedQuickLook;
+import ch.cyberduck.ui.cocoa.quicklook.QuartzQuickLook;
+import ch.cyberduck.ui.cocoa.serializer.*;
 
-import ch.cyberduck.ui.cocoa.threading.MainAction;
-
+import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 
 /**
- * @version $Id:$
+ * @version $Id$
  */
-public class CDMainApplication extends NSApplication {
+public class CDMainApplication {
     private static Logger log = Logger.getLogger(CDMainApplication.class);
 
-    public void sendEvent(final NSEvent event) {
-        if(event.type() == NSEvent.ApplicationDefined) {
-            try {
-                final MainAction runnable;
-                synchronized(events) {
-                    runnable = (MainAction) events.valueForKey(String.valueOf(event.subtype()));
-                }
-                if(null == runnable) {
-                    log.fatal("Event for unknown runnable:" + event.subtype());
-                    return;
-                }
-                if(runnable.isValid()) {
-                    runnable.run();
-                }
-                else {
-                    log.warn("Received outdated event:" + runnable);
-                }
-            }
-            finally {
-                this.remove(String.valueOf(event.subtype()));
-                if(log.isDebugEnabled()) {
-                    System.gc();
-                }
-            }
-            return;
-        }
-        super.sendEvent(event);
-    }
+    /**
+     * @param arguments
+     */
+    public static void main(String[] arguments) {
+        final NSAutoreleasePool pool = NSAutoreleasePool.push();
 
-    private final NSMutableDictionary events
-            = new NSMutableDictionary();
+        try {
+            final Logger root = Logger.getRootLogger();
+            root.setLevel(Level.toLevel(Preferences.instance().getProperty("logging")));
 
-    private void put(Object key, MainAction runnable) {
-        synchronized(events) {
-            events.setObjectForKey(runnable, String.valueOf(key));
-        }
-        if(log.isDebugEnabled()) {
-            log.debug("Event Queue Size:" + events.count());
-        }
-    }
+            if(log.isInfoEnabled())
+            log.info("Default garbage collector for the current process:" + NSGarbageCollector.defaultCollector());
+            log.info("Encoding " + System.getProperty("file.encoding"));
 
-    private void remove(Object key) {
-        synchronized(events) {
-            events.removeObjectForKey(key);
-        }
-    }
+            // This method also makes a connection to the window server and completes other initialization.
+            // Your program should invoke this method as one of the first statements in main();
+            // The NSApplication class sets up autorelease pools (instances of the NSAutoreleasePool class)
+            // during initialization and inside the event loop—specifically, within its initialization
+            // (or sharedApplication) and run methods.
+            final NSApplication app = NSApplication.sharedApplication();
 
-    public static synchronized void invoke(final MainAction runnable) {
-        invoke(runnable, false);
+            final CDMainController c = new CDMainController();
+
+            // Must implement NSApplicationDelegate protocol
+            app.setDelegate(c.id());
+
+            // Starts the main event loop. The loop continues until a stop: or terminate: message is
+            // received. Upon each iteration through the loop, the next available event
+            // from the window server is stored and then dispatched by sending it to NSApp using sendEvent:.
+            // The global application object uses autorelease pools in its run method.
+            app.run();
+        }
+        finally {
+            pool.drain();
+        }
     }
 
     /**
-     * Execute the passed <code>Runnable</code> on the main thread also known as NSRunLoop.DefaultRunLoopMode
-     *
-     * @param runnable The <code>Runnable</code> to run
-     * @param front    The event is added to the front of the queue.
-     *                 otherwise the event is added to the back of the queue.
+     * Register factory implementations.
      */
-    public static synchronized void invoke(final MainAction runnable, boolean front) {
-        if(isMainThread()) {
-            runnable.run();
-            return;
-        }
-        final short key = runnable.id();
-        NSEvent event = NSEvent.otherEvent(NSEvent.ApplicationDefined,
-                new NSPoint(0, 0), 0, System.currentTimeMillis() / 1000.0, 0,
-                null, key, -1, -1);
-        final CDMainApplication app = (CDMainApplication) sharedApplication();
-        app.put(String.valueOf(key), runnable);
-        // This method can also be called in subthreads. Events posted
-        // in subthreads bubble up in the main thread event queue.
-        app.postEvent(event, front);
-    }
+    static {
+        FinderLocal.register();
+        UserDefaultsPreferences.register();
+        BundleLocale.register();
 
-    private static final String MAIN_THREAD_NAME = "main";
+        PlistDeserializer.register();
+        PlistSerializer.register();
 
-    public static boolean isMainThread() {
-        return Thread.currentThread().getName().equals(MAIN_THREAD_NAME);
+        HostPlistReader.register();
+        TransferPlistReader.register();
+
+        PlistWriter.register();
+
+        Keychain.register();
+        SystemConfigurationProxy.register();
+        SystemConfigurationReachability.register();
+
+        DeprecatedQuickLook.register();
+        QuartzQuickLook.register();
     }
 }

@@ -18,7 +18,9 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.*;
+import ch.cyberduck.ui.cocoa.foundation.NSDate;
+import ch.cyberduck.ui.cocoa.foundation.NSDateFormatter;
+import ch.cyberduck.ui.cocoa.foundation.NSTimeZone;
 
 import org.apache.log4j.Logger;
 
@@ -31,31 +33,30 @@ public class CDDateFormatter {
     /**
      * TimeDateFormatString set in the system preferences
      */
-    private static final NSGregorianDateFormatter longDateFormatter
-            = new NSGregorianDateFormatter((String) NSUserDefaults.standardUserDefaults().objectForKey(
-            NSUserDefaults.TimeDateFormatString), false);
+    private static final NSDateFormatter longDateFormatter = NSDateFormatter.dateFormatter();
+
+    static {
+        longDateFormatter.setDateStyle(NSDateFormatter.kCFDateFormatterLongStyle);
+        longDateFormatter.setTimeStyle(NSDateFormatter.kCFDateFormatterLongStyle);
+    }
 
     /**
      * ShortTimeDateFormatString set in the system preferences
      */
-    private static final NSGregorianDateFormatter shortDateFormatter
-            = new NSGregorianDateFormatter((String) NSUserDefaults.standardUserDefaults().objectForKey(
-            NSUserDefaults.ShortTimeDateFormatString), false);
+    private static final NSDateFormatter shortDateFormatter = NSDateFormatter.dateFormatter();
 
-    /**
-     * Will be a negative value
-     */
-    private static double SECONDS_1970_TO_2001
-            = NSDate.DateFor1970.timeIntervalSinceReferenceDate();
+    static {
+        shortDateFormatter.setDateStyle(NSDateFormatter.kCFDateFormatterShortStyle);
+        shortDateFormatter.setTimeStyle(NSDateFormatter.kCFDateFormatterShortStyle);
+    }
 
     /**
      * @param milliseconds Milliseconds since January 1, 1970, 00:00:00 GMT
      * @return Seconds since the first instant of 1 January 2001, GMT
      */
-    private static double convertReferenceFrom1970To2001(long milliseconds) {
+    private static NSDate toDate(long milliseconds) {
         // first convert to seconds instead of milliseconds
-        double secondsFrom1970 = NSDate.millisecondsToTimeInterval(milliseconds);
-        return secondsFrom1970 + SECONDS_1970_TO_2001;
+        return NSDate.dateWithTimeIntervalSince1970(milliseconds / 1000);
     }
 
     /**
@@ -65,42 +66,17 @@ public class CDDateFormatter {
      * @return A short format string or "Unknown" if there is a problem converting the time to a string
      */
     public static String getShortFormat(final long milliseconds) {
-        return getShortFormat(convertReferenceFrom1970To2001(milliseconds), NSTimeZone.defaultTimeZone());
+        return getShortFormat(toDate(milliseconds), NSTimeZone.systemTimeZone());
     }
 
     /**
      * Modification date represented as NSUserDefaults.ShortTimeDateFormatString
      *
-     * @param milliseconds Milliseconds since January 1, 1970, 00:00:00 GMT
-     * @param timezone
      * @return A short format string or "Unknown" if there is a problem converting the time to a string
      */
-    public static String getShortFormat(final long milliseconds, final NSTimeZone timezone) {
-        return getShortFormat(convertReferenceFrom1970To2001(milliseconds), timezone);
-    }
-
-    /**
-     * Modification date represented as NSUserDefaults.ShortTimeDateFormatString
-     *
-     * @param seconds Seconds since the first instant of 1 January 2001, GMT
-     * @return A short format string or "Unknown" if there is a problem converting the time to a string
-     * @see com.apple.cocoa.foundation.NSFormatter.FormattingException
-     */
-    public static String getShortFormat(final double seconds, final NSTimeZone timezone) {
-        try {
-            // If you do not specify a time zone for an object at initialization time,
-            // NSGregorianDate uses the default time zone for the locale.
-            return shortDateFormatter.stringForObjectValue(
-                    // Creates a new Gregorian date initialized to the absolute
-                    // reference date (the first instant of 1 January 2001, GMT) plus seconds,
-                    new NSGregorianDate(seconds, timezone));
-        }
-        catch(NSFormatter.FormattingException e) {
-            // If an NSAttributedString cannot be created for anObject,
-            // an NSFormatter.FormattingException is thrown.
-            log.error(e.getMessage());
-        }
-        return NSBundle.localizedString("Unknown", "");
+    public static String getShortFormat(final NSDate date, final NSTimeZone timezone) {
+        //shortDateFormatter.setTimeZone(timezone);
+        return shortDateFormatter.stringFromDate(date);
     }
 
     /**
@@ -110,37 +86,16 @@ public class CDDateFormatter {
      * @return A long format string or "Unknown" if there is a problem converting the time to a string
      */
     public static String getLongFormat(final long milliseconds) {
-        return getLongFormat(milliseconds, NSTimeZone.defaultTimeZone());
+        return getLongFormat(toDate(milliseconds), NSTimeZone.systemTimeZone());
     }
 
     /**
      * Date represented as NSUserDefaults.TimeDateFormatString
      *
-     * @param milliseconds Milliseconds since January 1, 1970, 00:00:00 GMT
      * @return A long format string or "Unknown" if there is a problem converting the time to a string
      */
-    public static String getLongFormat(final long milliseconds, final NSTimeZone timezone) {
-        return getLongFormat(convertReferenceFrom1970To2001(milliseconds), timezone);
-    }
-
-    /**
-     * Date represented as NSUserDefaults.TimeDateFormatString
-     *
-     * @param seconds  Seconds since the first instant of 1 January 2001, GMT
-     * @param timezone
-     * @return A long format string or "Unknown" if there is a problem converting the time to a string
-     * @see com.apple.cocoa.foundation.NSFormatter.FormattingException
-     */
-    public static String getLongFormat(final double seconds, final NSTimeZone timezone) {
-        try {
-            return longDateFormatter.stringForObjectValue(
-                    // Creates a new Gregorian date initialized to the absolute
-                    // reference date (the first instant of 1 January 2001, GMT) plus seconds,
-                    new NSGregorianDate(seconds, timezone));
-        }
-        catch(NSFormatter.FormattingException e) {
-            log.error(e.getMessage());
-        }
-        return NSBundle.localizedString("Unknown", "");
+    public static String getLongFormat(final NSDate date, final NSTimeZone timezone) {
+        //longDateFormatter.setTimeZone(timezone);
+        return longDateFormatter.stringFromDate(date);
     }
 }

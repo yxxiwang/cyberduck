@@ -18,37 +18,34 @@ package ch.cyberduck.core.cf;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSDictionary;
-
 import ch.cyberduck.core.*;
 import ch.cyberduck.core.cloud.CloudPath;
 import ch.cyberduck.core.cloud.Distribution;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.core.io.BandwidthThrottle;
-import ch.cyberduck.core.ssl.AbstractX509TrustManager;
 
 import org.apache.commons.httpclient.methods.InputStreamRequestEntity;
+import org.apache.commons.io.IOUtils;
 import org.apache.log4j.Logger;
 import org.jets3t.service.utils.ServiceUtils;
 import org.w3c.util.DateParser;
 import org.w3c.util.InvalidDateException;
 
+import com.rackspacecloud.client.cloudfiles.FilesContainerInfo;
+import com.rackspacecloud.client.cloudfiles.FilesObject;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.URI;
 import java.security.NoSuchAlgorithmException;
 import java.text.MessageFormat;
 import java.text.ParseException;
 import java.util.Date;
 import java.util.HashMap;
-
-import com.mosso.client.cloudfiles.FilesCDNContainer;
-import com.mosso.client.cloudfiles.FilesContainerInfo;
-import com.mosso.client.cloudfiles.FilesObject;
+import java.util.List;
 
 /**
- * Mosso Cloud Files Implementation
+ * Rackspace Cloud Files Implementation
  *
  * @version $Id$
  */
@@ -59,21 +56,25 @@ public class CFPath extends CloudPath {
         PathFactory.addFactory(Protocol.MOSSO, new Factory());
     }
 
-    private static class Factory extends PathFactory {
-        protected Path create(Session session, String path, int type) {
-            return new CFPath((CFSession) session, path, type);
+    private static class Factory extends PathFactory<CFSession> {
+        @Override
+        protected Path create(CFSession session, String path, int type) {
+            return new CFPath(session, path, type);
         }
 
-        protected Path create(Session session, String parent, String name, int type) {
-            return new CFPath((CFSession) session, parent, name, type);
+        @Override
+        protected Path create(CFSession session, String parent, String name, int type) {
+            return new CFPath(session, parent, name, type);
         }
 
-        protected Path create(Session session, String path, Local file) {
-            return new CFPath((CFSession) session, path, file);
+        @Override
+        protected Path create(CFSession session, String path, Local file) {
+            return new CFPath(session, path, file);
         }
 
-        protected Path create(Session session, NSDictionary dict) {
-            return new CFPath((CFSession) session, dict);
+        @Override
+        protected <T> Path create(CFSession session, T dict) {
+            return new CFPath(session, dict);
         }
     }
 
@@ -94,83 +95,17 @@ public class CFPath extends CloudPath {
         this.session = s;
     }
 
-    protected CFPath(CFSession s, NSDictionary dict) {
+    protected <T> CFPath(CFSession s, T dict) {
         super(dict);
         this.session = s;
     }
 
+    @Override
     public Session getSession() {
         return this.session;
     }
 
-    /**
-     * @param enabled Enable content distribution for the container
-     * @param cnames  Currently ignored
-     * @param logging
-     */
-    public void writeDistribution(boolean enabled, String[] cnames, boolean logging) {
-        final String container = this.getContainerName();
-        final AbstractX509TrustManager trust = session.getTrustManager();
-        try {
-            session.check();
-            trust.setHostname(URI.create(session.CF.getCdnManagementURL()).getHost());
-            if(enabled) {
-                session.message(MessageFormat.format(NSBundle.localizedString("Enable {0} Distribution", "Status", ""),
-                        NSBundle.localizedString("Mosso Cloud Files", "Mosso", "")));
-            }
-            else {
-                session.message(MessageFormat.format(NSBundle.localizedString("Disable {0} Distribution", "Status", ""),
-                        NSBundle.localizedString("Mosso Cloud Files", "Mosso", "")));
-            }
-            if(enabled) {
-                final FilesCDNContainer info = session.CF.getCDNContainerInfo(container);
-                if(null == info) {
-                    // Not found.
-                    session.CF.cdnEnableContainer(container);
-                }
-                else {
-                    // Enable content distribution for the container without changing the TTL expiration
-                    session.CF.cdnUpdateContainer(container, -1, true);
-                }
-            }
-            else {
-                // Disable content distribution for the container
-                session.CF.cdnUpdateContainer(container, -1, false);
-            }
-        }
-        catch(IOException e) {
-            this.error("Cannot change permissions", e);
-        }
-        finally {
-            trust.setHostname(URI.create(session.CF.getStorageURL()).getHost());
-        }
-    }
-
-    public Distribution readDistribution() {
-        final String container = this.getContainerName();
-        if(null != container) {
-            final AbstractX509TrustManager trust = session.getTrustManager();
-            try {
-                session.check();
-                trust.setHostname(URI.create(session.CF.getCdnManagementURL()).getHost());
-                final FilesCDNContainer info = session.CF.getCDNContainerInfo(container);
-                if(null == info) {
-                    // Not found.
-                    return new Distribution(false, null, NSBundle.localizedString("CDN Disabled", "Mosso", ""));
-                }
-                return new Distribution(info.isEnabled(), info.getCdnURL(),
-                        info.isEnabled() ? NSBundle.localizedString("CDN Enabled", "Mosso", "") : NSBundle.localizedString("CDN Disabled", "Mosso", ""));
-            }
-            catch(IOException e) {
-                this.error(e.getMessage(), e);
-            }
-            finally {
-                trust.setHostname(URI.create(session.CF.getStorageURL()).getHost());
-            }
-        }
-        return new Distribution(false, null, null);
-    }
-
+    @Override
     public boolean exists() {
         if(this.isRoot()) {
             return true;
@@ -186,10 +121,11 @@ public class CFPath extends CloudPath {
         return super.exists();
     }
 
+    @Override
     public void readSize() {
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Getting size of {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Getting size of {0}", "Status"),
                     this.getName()));
 
             if(this.isContainer()) {
@@ -208,10 +144,11 @@ public class CFPath extends CloudPath {
         }
     }
 
+    @Override
     public void readTimestamp() {
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Getting timestamp of {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Getting timestamp of {0}", "Status"),
                     this.getName()));
 
             if(!this.isContainer()) {
@@ -232,6 +169,7 @@ public class CFPath extends CloudPath {
         }
     }
 
+    @Override
     public void readPermission() {
         ;
     }
@@ -241,29 +179,28 @@ public class CFPath extends CloudPath {
      *
      * @return Always false
      */
+    @Override
     public boolean isWritePermissionsSupported() {
         return false;
     }
 
+    @Override
     public void writePermissions(Permission perm, boolean recursive) {
-        throw new UnsupportedOperationException();
+        ;
     }
 
-    /**
-     * @param metadata Read additional metadata
-     * @return
-     */
+    @Override
     public AttributedList<Path> list() {
         final AttributedList<Path> childs = new AttributedList<Path>();
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Listing directory {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Listing directory {0}", "Status"),
                     this.getName()));
 
             if(this.isRoot()) {
                 // List all containers
                 for(FilesContainerInfo container : session.CF.listContainersInfo()) {
-                    CFPath p = (CFPath) PathFactory.createPath(session, this.getAbsolute(), container.getName(),
+                    Path p = PathFactory.createPath(session, this.getAbsolute(), container.getName(),
                             Path.VOLUME_TYPE | Path.DIRECTORY_TYPE);
                     p.attributes.setSize(container.getTotalSize());
                     p.attributes.setOwner(session.CF.getUserName());
@@ -272,29 +209,38 @@ public class CFPath extends CloudPath {
                 }
             }
             else {
-                for(FilesObject object : session.CF.listObjects(this.getContainerName(), this.getKey())) {
-                    final CFPath file = (CFPath) PathFactory.createPath(session, this.getContainerName(), object.getName(),
-                            "application/directory".equals(object.getMimeType()) ? Path.DIRECTORY_TYPE : Path.FILE_TYPE);
-                    if(file.getParent().equals(this)) {
-                        file.setParent(this);
-                        if(file.attributes.getType() == Path.FILE_TYPE) {
-                            file.attributes.setSize(object.getSize());
-                        }
-                        try {
-                            final Date modified = DateParser.parse(object.getLastModified());
-                            if(null != modified) {
-                                file.attributes.setModificationDate(modified.getTime());
+                final int limit = Preferences.instance().getInteger("cf.list.limit");
+                List<FilesObject> list;
+                String marker = null;
+                do {
+                    list = session.CF.listObjects(this.getContainerName(), this.getKey(), limit, marker);
+                    for(FilesObject object : list) {
+                        final Path file = PathFactory.createPath(session, this.getContainerName(), object.getName(),
+                                "application/directory".equals(object.getMimeType()) ? Path.DIRECTORY_TYPE : Path.FILE_TYPE);
+                        if(file.getParent().equals(this)) {
+                            file.setParent(this);
+                            if(file.attributes.getType() == Path.FILE_TYPE) {
+                                file.attributes.setSize(object.getSize());
                             }
-                        }
-                        catch(InvalidDateException e) {
-                            log.warn("Not ISO 8601 format:" + e.getMessage());
-                        }
-                        file.attributes.setOwner(this.attributes.getOwner());
+                            try {
+                                final Date modified = DateParser.parse(object.getLastModified());
+                                if(null != modified) {
+                                    file.attributes.setModificationDate(modified.getTime());
+                                }
+                            }
+                            catch(InvalidDateException e) {
+                                log.warn("Not ISO 8601 format:" + e.getMessage());
+                            }
+                            file.attributes.setOwner(this.attributes.getOwner());
 
-                        childs.add(file);
+                            childs.add(file);
+                        }
+                        marker = object.getName();
                     }
                 }
+                while(list.size() == limit);
             }
+            session.setWorkdir(this);
         }
         catch(IOException e) {
             childs.attributes().setReadable(false);
@@ -303,6 +249,7 @@ public class CFPath extends CloudPath {
         return childs;
     }
 
+    @Override
     public void download(final BandwidthThrottle throttle, final StreamListener listener, boolean check) {
         if(attributes.isFile()) {
             OutputStream out = null;
@@ -311,7 +258,7 @@ public class CFPath extends CloudPath {
                 if(check) {
                     session.check();
                 }
-                this.getSession().message(MessageFormat.format(NSBundle.localizedString("Downloading {0}", "Status", ""),
+                this.getSession().message(MessageFormat.format(Locale.localizedString("Downloading {0}", "Status"),
                         this.getName()));
 
                 in = this.session.CF.getObjectAsStream(this.getContainerName(), this.getKey());
@@ -329,17 +276,8 @@ public class CFPath extends CloudPath {
                 this.error("Download failed", e);
             }
             finally {
-                try {
-                    if(in != null) {
-                        in.close();
-                    }
-                    if(out != null) {
-                        out.close();
-                    }
-                }
-                catch(IOException e) {
-                    log.error(e.getMessage());
-                }
+                IOUtils.closeQuietly(in);
+                IOUtils.closeQuietly(out);
             }
         }
         if(attributes.isDirectory()) {
@@ -347,6 +285,7 @@ public class CFPath extends CloudPath {
         }
     }
 
+    @Override
     protected void upload(final BandwidthThrottle throttle, final StreamListener listener, Permission p, boolean check) {
         try {
             if(check) {
@@ -357,12 +296,12 @@ public class CFPath extends CloudPath {
                 final Status stat = this.getStatus();
                 stat.setCurrent(0);
                 final InputStream in = new Local.InputStream(this.getLocal());
-                this.getSession().message(MessageFormat.format(NSBundle.localizedString("Compute MD5 hash of {0}", "Status", ""),
+                this.getSession().message(MessageFormat.format(Locale.localizedString("Compute MD5 hash of {0}", "Status"),
                         this.getName()));
                 String md5sum = null;
                 try {
                     md5sum = ServiceUtils.toHex(ServiceUtils.computeMD5Hash(new Local.InputStream(this.getLocal())));
-                    this.getSession().message(MessageFormat.format(NSBundle.localizedString("Uploading {0}", "Status", ""),
+                    this.getSession().message(MessageFormat.format(Locale.localizedString("Uploading {0}", "Status"),
                             this.getName()));
                 }
                 catch(NoSuchAlgorithmException e) {
@@ -376,6 +315,7 @@ public class CFPath extends CloudPath {
 
                             boolean requested = false;
 
+                            @Override
                             public void writeRequest(OutputStream out) throws IOException {
                                 if(requested) {
                                     in.reset();
@@ -390,6 +330,7 @@ public class CFPath extends CloudPath {
                                 }
                             }
 
+                            @Override
                             public boolean isRepeatable() {
                                 return true;
                             }
@@ -397,26 +338,21 @@ public class CFPath extends CloudPath {
                         metadata, md5sum
                 );
             }
-        if(attributes.isDirectory()) {
-            this.mkdir();
+            if(attributes.isDirectory()) {
+                this.mkdir();
+            }
+        }
+        catch(IOException e) {
+            this.error("Upload failed", e);
         }
     }
 
-    catch(
-    IOException e
-    )
-
-    {
-        this.error("Upload failed", e);
-    }
-
-}
-
+    @Override
     public void mkdir(boolean recursive) {
         log.debug("mkdir:" + this.getName());
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Making directory {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Making directory {0}", "Status"),
                     this.getName()));
 
             if(this.isContainer()) {
@@ -433,12 +369,13 @@ public class CFPath extends CloudPath {
         }
     }
 
+    @Override
     public void delete() {
         log.debug("delete:" + this.toString());
         try {
             session.check();
             if(!this.isContainer()) {
-                session.message(MessageFormat.format(NSBundle.localizedString("Deleting {0}", "Status", ""),
+                session.message(MessageFormat.format(Locale.localizedString("Deleting {0}", "Status"),
                         this.getName()));
 
                 session.CF.deleteObject(this.getContainerName(), this.getKey());
@@ -465,10 +402,12 @@ public class CFPath extends CloudPath {
         }
     }
 
+    @Override
     public boolean isRenameSupported() {
         return false;
     }
 
+    @Override
     public void rename(AbstractPath renamed) {
         throw new UnsupportedOperationException();
     }
@@ -476,8 +415,9 @@ public class CFPath extends CloudPath {
     /**
      * @return Publicy accessible URL of given object
      */
+    @Override
     public String toHttpURL() {
-        final Distribution distribution = this.readDistribution();
+        final Distribution distribution = session.readDistribution(this.getContainerName());
         if(null == distribution.getUrl()) {
             return super.toHttpURL();
         }

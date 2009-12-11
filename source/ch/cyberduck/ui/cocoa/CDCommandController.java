@@ -18,18 +18,19 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.*;
-import com.apple.cocoa.foundation.NSAttributedString;
-import com.apple.cocoa.foundation.NSRange;
-import com.apple.cocoa.foundation.NSPathUtilities;
-
 import ch.cyberduck.core.Session;
 import ch.cyberduck.core.TranscriptListener;
-import ch.cyberduck.core.Local;
+import ch.cyberduck.core.LocalFactory;
+import ch.cyberduck.ui.cocoa.application.*;
+import ch.cyberduck.ui.cocoa.foundation.NSAttributedString;
+import ch.cyberduck.ui.cocoa.foundation.NSObject;
+import ch.cyberduck.ui.cocoa.foundation.NSRange;
+import ch.cyberduck.ui.cocoa.threading.BrowserBackgroundAction;
 import ch.cyberduck.ui.cocoa.threading.WindowMainAction;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
+import org.rococoa.cocoa.foundation.NSUInteger;
 
 import java.io.IOException;
 
@@ -38,13 +39,17 @@ import com.enterprisedt.net.ftp.FTPException;
 /**
  * @version $Id$
  */
-public class CDCommandController extends CDSheetController implements TranscriptListener {
+public class CDCommandController extends CDSheetController implements TranscriptListener, NSLayoutManager.Delegate {
     private static Logger log = Logger.getLogger(CDCommandController.class);
 
-    private NSTextField inputField; //IBOutlet
-    private NSTextView responseField; //IBOutlet
-    private NSProgressIndicator progress; //IBOutlet
-    private NSImageView image; //IBOutlet
+    @Outlet
+    private NSTextField inputField;
+    @Outlet
+    private NSTextView responseField;
+    @Outlet
+    private NSProgressIndicator progress;
+    @Outlet
+    private NSImageView image;
 
     public void setInputField(NSTextField inputField) {
         this.inputField = inputField;
@@ -56,7 +61,7 @@ public class CDCommandController extends CDSheetController implements Transcript
         this.responseField.setSelectable(true);
         this.responseField.setUsesFontPanel(false);
         this.responseField.setRichText(false);
-        this.responseField.layoutManager().setDelegate(this);
+        this.responseField.layoutManager().setDelegate(this.id());
     }
 
     public void setProgress(NSProgressIndicator progress) {
@@ -67,14 +72,16 @@ public class CDCommandController extends CDSheetController implements Transcript
     public void setImage(NSImageView image) {
         this.image = image;
         final String t = NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier("com.apple.Terminal");
-        this.image.setImage(CDIconCache.instance().iconForPath(new Local(t), 128));
+        this.image.setImage(CDIconCache.instance().iconForPath(LocalFactory.createLocal(t), 128));
     }
 
-    public void layoutManagerDidCompleteLayoutForTextContainer(NSLayoutManager layoutManager,
-                                                               NSTextContainer textContainer,
-                                                               boolean finished) {
+    public void layoutManager_didCompleteLayoutForTextContainer_atEnd(NSLayoutManager layoutManager,
+                                                                      NSObject textContainer,
+                                                                      boolean finished) {
         if(finished && this.responseField.window().isVisible()) {
-            this.responseField.scrollRangeToVisible(new NSRange(this.responseField.textStorage().length(), 0));
+            this.responseField.scrollRangeToVisible(
+                    NSRange.NSMakeRange(this.responseField.textStorage().length(), new NSUInteger(0))
+            );
         }
     }
 
@@ -90,13 +97,12 @@ public class CDCommandController extends CDSheetController implements Transcript
         this.session.addTranscriptListener(this);
     }
 
+    @Override
     protected String getBundleName() {
         return "Command";
     }
 
-    /**
-     * @param sender
-     */
+    @Action
     public void sendButtonClicked(final NSButton sender) {
         final String command = this.inputField.stringValue();
         if(StringUtils.isNotBlank(command)) {
@@ -117,6 +123,7 @@ public class CDCommandController extends CDSheetController implements Transcript
                     }
                 }
 
+                @Override
                 public void cleanup() {
                     progress.stopAnimation(null);
                     sender.setEnabled(true);
@@ -125,6 +132,7 @@ public class CDCommandController extends CDSheetController implements Transcript
                     }
                 }
 
+                @Override
                 public String getActivity() {
                     return command;
                 }
@@ -133,14 +141,16 @@ public class CDCommandController extends CDSheetController implements Transcript
     }
 
     public void log(boolean request, final String message) {
-        CDMainApplication.invoke(new WindowMainAction(this) {
+        invoke(new WindowMainAction(this) {
             public void run() {
-                responseField.textStorage().replaceCharactersInRange(new NSRange(responseField.textStorage().length(), 0),
-                        new NSAttributedString(message + "\n", FIXED_WITH_FONT_ATTRIBUTES));
+                responseField.textStorage().replaceCharactersInRange_withAttributedString(
+                        NSRange.NSMakeRange(responseField.textStorage().length(), new NSUInteger(0)),
+                        NSAttributedString.attributedStringWithAttributes(message + "\n", FIXED_WITH_FONT_ATTRIBUTES));
             }
         });
     }
 
+    @Override
     protected boolean validateInput() {
         return true;
     }
@@ -149,8 +159,10 @@ public class CDCommandController extends CDSheetController implements Transcript
         ;
     }
 
+    @Override
     protected void invalidate() {
         session.removeTranscriptListener(this);
+        responseField.layoutManager().setDelegate(null);
         super.invalidate();
     }
 }

@@ -18,25 +18,23 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSCell;
-import com.apple.cocoa.application.NSOutlineView;
-import com.apple.cocoa.application.NSTableColumn;
-import com.apple.cocoa.application.NSTableView;
-import com.apple.cocoa.foundation.NSMutableRect;
-import com.apple.cocoa.foundation.NSNotification;
-import com.apple.cocoa.foundation.NSPoint;
-
 import ch.cyberduck.core.NullComparator;
 import ch.cyberduck.core.Preferences;
+import ch.cyberduck.ui.cocoa.application.NSOutlineView;
+import ch.cyberduck.ui.cocoa.application.NSTableColumn;
+import ch.cyberduck.ui.cocoa.application.NSTableView;
+import ch.cyberduck.ui.cocoa.foundation.NSNotification;
+import ch.cyberduck.ui.cocoa.foundation.NSObject;
 
 import org.apache.log4j.Logger;
+import org.rococoa.ID;
 
 import java.util.Comparator;
 
 /**
  * @version $Id$
  */
-public abstract class CDAbstractTableDelegate<E> extends CDController implements CDTableDelegate<E> {
+public abstract class CDAbstractTableDelegate<E> extends ProxyController implements CDTableDelegate<E> {
     private static Logger log = Logger.getLogger(CDAbstractTableDelegate.class);
 
     private NSTableColumn selectedColumn;
@@ -56,7 +54,7 @@ public abstract class CDAbstractTableDelegate<E> extends CDController implements
             return Preferences.instance().getProperty("browser.sort.column");
         }
         //return previously set custom sorting preference
-        return (String) this.selectedColumn.identifier();
+        return this.selectedColumn.identifier();
     }
 
     /**
@@ -69,28 +67,28 @@ public abstract class CDAbstractTableDelegate<E> extends CDController implements
     /**
      * @see NSTableView.DataSource
      */
-    public boolean tableViewShouldSelectRow(NSTableView view, int rowIndex) {
+    public boolean tableView_shouldSelectRow(NSTableView view, int rowIndex) {
         return true;
     }
 
     /**
      * @see NSTableView.DataSource
      */
-    public boolean outlineViewShouldSelectItem(NSOutlineView view, Object item) {
+    public boolean outlineView_shouldSelectItem(NSOutlineView view, NSObject item) {
         return true;
     }
 
     /**
      * @see NSTableView.DataSource
      */
-    public boolean tableViewShouldEditLocation(NSTableView view, NSTableColumn tableColumn, int row) {
+    public boolean tableView_shouldEditTableColumn_row(NSTableView view, NSTableColumn tableColumn, int row) {
         return false;
     }
 
     /**
      * @see NSTableView.DataSource
      */
-    public boolean outlineViewShouldEditTableColumn(NSOutlineView view, NSTableColumn tableColumn, Object item) {
+    public boolean outlineView_shouldEditTableColumn_item(NSOutlineView view, NSTableColumn tableColumn, NSObject item) {
         return false;
     }
 
@@ -117,20 +115,24 @@ public abstract class CDAbstractTableDelegate<E> extends CDController implements
     /**
      * @see NSOutlineView.Delegate
      */
-    public void outlineViewDidClickTableColumn(NSOutlineView view, NSTableColumn tableColumn) {
+    public void outlineView_didClickTableColumn(NSOutlineView view, NSTableColumn tableColumn) {
         this.tableColumnClicked(view, tableColumn);
     }
 
     /**
      * @see NSTableView.Delegate
      */
-    public void tableViewDidClickTableColumn(NSOutlineView view, NSTableColumn tableColumn) {
+    public void tableView_didClickTableColumn(NSOutlineView view, NSTableColumn tableColumn) {
         this.tableColumnClicked(view, tableColumn);
     }
 
-    public abstract void tableRowDoubleClicked(final Object sender);
+    /**
+     * @param sender
+     */
+    public abstract void tableRowDoubleClicked(final ID sender);
 
     /**
+     * @param notification
      * @see NSTableView.Notifications
      */
     public void tableViewSelectionDidChange(NSNotification notification) {
@@ -138,11 +140,16 @@ public abstract class CDAbstractTableDelegate<E> extends CDController implements
     }
 
 
+    /**
+     * @param notification
+     * @see NSTableView.Notifications
+     */
     public void tableViewSelectionIsChanging(NSNotification notification) {
         this.selectionIsChanging(notification);
     }
 
     /**
+     * @param notification
      * @see NSOutlineView.Notifications
      */
     public void outlineViewSelectionDidChange(NSNotification notification) {
@@ -150,24 +157,23 @@ public abstract class CDAbstractTableDelegate<E> extends CDController implements
     }
 
     /**
+     * @param notification
      * @see NSOutlineView.Notifications
      */
     public void outlineViewSelectionIsChanging(NSNotification notification) {
         this.selectionIsChanging(notification);
     }
 
+    /**
+     * @param notification
+     */
     public abstract void selectionDidChange(NSNotification notification);
 
+    /**
+     * @param notification
+     */
     public void selectionIsChanging(NSNotification notification) {
         ;
-    }
-
-    /**
-     * @see NSOutlineView.Delegate
-     */
-    public String outlineViewToolTipForCell(NSOutlineView view, NSCell cell, NSMutableRect rect, NSTableColumn tableColumn,
-                                            final E item, NSPoint mouseLocation) {
-        return this.tooltip(item);
     }
 
     // ----------------------------------------------------------
@@ -184,7 +190,7 @@ public abstract class CDAbstractTableDelegate<E> extends CDController implements
         //cache custom sorting preference
         this.sortAscending = sortAscending;
         //set default value
-        Preferences.instance().setProperty("browser.sort.ascending", this.sortAscending.booleanValue());
+        Preferences.instance().setProperty("browser.sort.ascending", this.sortAscending);
     }
 
     public boolean isSortedAscending() {

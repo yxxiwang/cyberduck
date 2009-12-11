@@ -18,17 +18,16 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSDictionary;
-import com.apple.cocoa.foundation.NSMutableDictionary;
-
 import ch.cyberduck.core.ftp.FTPPath;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.core.io.BandwidthThrottle;
-import ch.cyberduck.ui.cocoa.CDMainApplication;
-import ch.cyberduck.ui.cocoa.growl.Growl;
-import ch.cyberduck.ui.cocoa.threading.DefaultMainAction;
+import ch.cyberduck.core.serializer.Serializer;
+import ch.cyberduck.ui.growl.Growl;
 
-import java.util.*;
+import java.util.Calendar;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.TimeZone;
 
 /**
  * @version $Id$
@@ -39,14 +38,15 @@ public class SyncTransfer extends Transfer {
         super(root);
     }
 
-    public SyncTransfer(NSDictionary dict, Session s) {
+    public <T> SyncTransfer(T dict, Session s) {
         super(dict, s);
     }
 
-    public NSMutableDictionary getAsDictionary() {
-        NSMutableDictionary dict = super.getAsDictionary();
-        dict.setObjectForKey(String.valueOf(TransferFactory.KIND_SYNC), "Kind");
-        return dict;
+    @Override
+    public <T> T getAsDictionary() {
+        final Serializer dict = super.getSerializer();
+        dict.setStringForKey(String.valueOf(KIND_SYNC), "Kind");
+        return dict.<T>getSerialized();
     }
 
     /**
@@ -59,24 +59,29 @@ public class SyncTransfer extends Transfer {
      */
     private Transfer _delegateDownload;
 
+    @Override
     protected void init() {
         log.debug("init");
         _delegateUpload = new UploadTransfer(this.getRoots());
         _delegateDownload = new DownloadTransfer(this.getRoots());
     }
 
+    @Override
     public void setBandwidth(float bytesPerSecond) {
         ;
     }
 
+    @Override
     public float getBandwidth() {
         return BandwidthThrottle.UNLIMITED;
     }
 
+    @Override
     public String getName() {
         return this.getRoot().getName() + " \u2194 " /*left-right arrow*/ + this.getRoot().getLocal().getName();
     }
 
+    @Override
     public double getSize() {
         final double size = _delegateDownload.getSize() + _delegateUpload.getSize();
         if(0 == size) {
@@ -85,6 +90,7 @@ public class SyncTransfer extends Transfer {
         return size;
     }
 
+    @Override
     public double getTransferred() {
         final double transferred = _delegateDownload.getTransferred() + _delegateUpload.getTransferred();
         if(0 == transferred) {
@@ -102,7 +108,6 @@ public class SyncTransfer extends Transfer {
      */
     public void setTransferAction(TransferAction action) {
         this.action = action;
-        this._comparisons.clear();
     }
 
     /**
@@ -117,8 +122,9 @@ public class SyncTransfer extends Transfer {
             return "download";
         }
 
+        @Override
         public String getLocalizableString() {
-            return NSBundle.localizedString("Download", "");
+            return Locale.localizedString("Download");
         }
     };
     public static final TransferAction ACTION_UPLOAD = new TransferAction() {
@@ -126,8 +132,9 @@ public class SyncTransfer extends Transfer {
             return "upload";
         }
 
+        @Override
         public String getLocalizableString() {
-            return NSBundle.localizedString("Upload", "");
+            return Locale.localizedString("Upload");
         }
     };
     public static final TransferAction ACTION_MIRROR = new TransferAction() {
@@ -135,8 +142,9 @@ public class SyncTransfer extends Transfer {
             return "mirror";
         }
 
+        @Override
         public String getLocalizableString() {
-            return NSBundle.localizedString("Mirror", "");
+            return Locale.localizedString("Mirror");
         }
     };
 
@@ -153,6 +161,7 @@ public class SyncTransfer extends Transfer {
         private TransferFilter _delegateFilterUpload
                 = _delegateUpload.filter(TransferAction.ACTION_OVERWRITE);
 
+        @Override
         public void prepare(Path p) {
             final Comparison compare = SyncTransfer.this.compare(p);
             if(compare.equals(COMPARISON_REMOTE_NEWER)) {
@@ -179,6 +188,7 @@ public class SyncTransfer extends Transfer {
         }
     };
 
+    @Override
     public TransferFilter filter(final TransferAction action) {
         log.debug("filter:" + action);
         if(action.equals(TransferAction.ACTION_OVERWRITE)) {
@@ -192,32 +202,26 @@ public class SyncTransfer extends Transfer {
         return super.filter(action);
     }
 
-    private final Cache<Path> _cache = new Cache<Path>();
-
+    @Override
     public AttributedList<Path> childs(final Path parent) {
-        if(!_cache.containsKey(parent)) {
-            Set<Path> childs = new HashSet<Path>();
-            childs.addAll(_delegateDownload.childs(parent));
-            childs.addAll(_delegateUpload.childs(parent));
-            _cache.put(parent, new AttributedList<Path>(childs));
-        }
-        return _cache.get(parent);
+        final Set<Path> childs = new HashSet<Path>();
+        childs.addAll(_delegateDownload.childs(parent));
+        childs.addAll(_delegateUpload.childs(parent));
+        return new AttributedList<Path>(childs);
     }
 
-    public boolean isCached(Path file) {
-        return _cache.containsKey(file);
-    }
-
-    public boolean isSelectable(Path item) {
-        return item.attributes.isDirectory() || !this.compare(item).equals(COMPARISON_EQUAL);
-    }
-
+    @Override
     public TransferAction action(final boolean resumeRequested, final boolean reloadRequested) {
         log.debug("action:" + resumeRequested + "," + reloadRequested);
         // Always prompt for synchronization
         return TransferAction.ACTION_CALLBACK;
     }
 
+    /**
+     * @param p
+     * @see #compare(Path)
+     */
+    @Override
     protected void _transferImpl(final Path p) {
         final Comparison compare = this.compare(p);
         if(compare.equals(COMPARISON_REMOTE_NEWER)) {
@@ -226,40 +230,25 @@ public class SyncTransfer extends Transfer {
         else if(compare.equals(COMPARISON_LOCAL_NEWER)) {
             _delegateUpload._transferImpl(p);
         }
+        log.error("Should not reach here. Path " + p + " has equal comparison");
     }
 
+    @Override
     protected void fireTransferDidEnd() {
         if(this.isReset() && this.isComplete() && !this.isCanceled()) {
-            CDMainApplication.invoke(new DefaultMainAction() {
-                public void run() {
-                    Growl.instance().notify("Synchronization complete", getName());
-                }
-            }, true);
+            Growl.instance().notify("Synchronization complete", getName());
         }
         super.fireTransferDidEnd();
     }
 
-    public boolean exists(Path file) {
-        if(roots.contains(file)) {
-            return true;
-        }
-        else if(!this.exists((Path) file.getParent())) {
-            return false;
-        }
-        return super.exists(file);
-    }
-
+    @Override
     protected void clear(final TransferOptions options) {
-        _comparisons.clear();
-
         _delegateDownload.clear(options);
         _delegateUpload.clear(options);
-
-        _cache.clear();
-
         super.clear(options);
     }
 
+    @Override
     protected void reset() {
         _delegateDownload.reset();
         _delegateUpload.reset();
@@ -267,18 +256,13 @@ public class SyncTransfer extends Transfer {
         super.reset();
     }
 
-    private final Map<Path, Comparison> _comparisons
-            = new HashMap<Path, Comparison>();
-
     /**
      *
      */
     public static class Comparison {
+        @Override
         public boolean equals(Object other) {
-            if(null == other) {
-                return false;
-            }
-            return this == other;
+            return super.equals(other);
         }
     }
 
@@ -286,6 +270,7 @@ public class SyncTransfer extends Transfer {
      * Remote file is newer or local file does not exist
      */
     public static final Comparison COMPARISON_REMOTE_NEWER = new Comparison() {
+        @Override
         public String toString() {
             return "COMPARISON_REMOTE_NEWER";
         }
@@ -294,6 +279,7 @@ public class SyncTransfer extends Transfer {
      * Local file is newer or remote file does not exist
      */
     public static final Comparison COMPARISON_LOCAL_NEWER = new Comparison() {
+        @Override
         public String toString() {
             return "COMPARISON_LOCAL_NEWER";
         }
@@ -302,6 +288,7 @@ public class SyncTransfer extends Transfer {
      * Files are identical or directories
      */
     public static final Comparison COMPARISON_EQUAL = new Comparison() {
+        @Override
         public String toString() {
             return "COMPARISON_EQUAL";
         }
@@ -310,6 +297,7 @@ public class SyncTransfer extends Transfer {
      * Files differ in size
      */
     private static final Comparison COMPARISON_UNEQUAL = new Comparison() {
+        @Override
         public String toString() {
             return "COMPARISON_UNEQUAL";
         }
@@ -320,50 +308,36 @@ public class SyncTransfer extends Transfer {
      * @return COMPARISON_REMOTE_NEWER, COMPARISON_LOCAL_NEWER or COMPARISON_EQUAL
      */
     public Comparison compare(Path p) {
-        if(!_comparisons.containsKey(p)) {
-            log.debug("compare:" + p);
-            Comparison result = COMPARISON_EQUAL;
-            if(SyncTransfer.this.exists(p.getLocal()) && SyncTransfer.this.exists(p)) {
-                if(p.attributes.isFile()) {
-                    result = this.compareSize(p);
-                    if(result.equals(COMPARISON_UNEQUAL)) {
-                        if(this.getAction().equals(ACTION_DOWNLOAD)) {
-                            result = COMPARISON_REMOTE_NEWER;
-                        }
-                        else if(this.getAction().equals(ACTION_UPLOAD)) {
-                            result = COMPARISON_LOCAL_NEWER;
-                        }
-                        else if(this.getAction().equals(ACTION_MIRROR)) {
-                            result = this.compareTimestamp(p);
-                        }
-                    }
-                }
-            }
-            else if(SyncTransfer.this.exists(p)) {
-                // only the remote file exists
-                result = COMPARISON_REMOTE_NEWER;
-            }
-            else if(SyncTransfer.this.exists(p.getLocal())) {
-                // only the local file exists
-                result = COMPARISON_LOCAL_NEWER;
-            }
-
-            // Updating default inclusion settings
-            if(COMPARISON_EQUAL.equals(result)) {
-                this.setSkipped(p, p.attributes.isFile());
-            }
-            else {
-                if(result.equals(COMPARISON_REMOTE_NEWER)) {
-                    this.setSkipped(p, this.getAction().equals(ACTION_UPLOAD));
-                }
-                else if(result.equals(COMPARISON_LOCAL_NEWER)) {
-                    this.setSkipped(p, this.getAction().equals(ACTION_DOWNLOAD));
-                }
-            }
-
-            _comparisons.put(p, result);
+        log.debug("compare:" + p);
+        Comparison result = COMPARISON_EQUAL;
+        if(p.getLocal().exists() && p.exists()) {
+            result = this.compareTimestamp(p);
         }
-        return _comparisons.get(p);
+        else if(p.exists()) {
+            // only the remote file exists
+            result = COMPARISON_REMOTE_NEWER;
+        }
+        else if(p.getLocal().exists()) {
+            // only the local file exists
+            result = COMPARISON_LOCAL_NEWER;
+        }
+
+        boolean skipped = false;
+        // Updating default skip settings for actual transfer
+        if(COMPARISON_EQUAL.equals(result)) {
+            skipped = true;
+        }
+        else if(p.attributes.isFile()) {
+            if(result.equals(COMPARISON_REMOTE_NEWER)) {
+                skipped = this.getAction().equals(ACTION_UPLOAD);
+            }
+            else if(result.equals(COMPARISON_LOCAL_NEWER)) {
+                skipped = this.getAction().equals(ACTION_DOWNLOAD);
+            }
+        }
+        p.getStatus().setSkipped(skipped);
+
+        return result;
     }
 
     /**
@@ -398,8 +372,7 @@ public class SyncTransfer extends Transfer {
      */
     private Comparison compareTimestamp(Path p) {
         log.debug("compareTimestamp:" + p);
-        if(p.attributes.getModificationDate() == -1
-                || p instanceof FTPPath) {
+        if(p.attributes.getModificationDate() == -1 || p instanceof FTPPath) {
             // Make sure we have a UTC timestamp
             p.readTimestamp();
         }
@@ -417,7 +390,6 @@ public class SyncTransfer extends Transfer {
 
     /**
      * @param timestamp
-     * @param timezone
      * @param precision
      * @return
      */

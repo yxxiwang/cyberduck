@@ -18,25 +18,25 @@ package ch.cyberduck.ui.cocoa.odb;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSWorkspace;
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSDictionary;
-
 import ch.cyberduck.core.*;
-import ch.cyberduck.ui.cocoa.BrowserBackgroundAction;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.ui.cocoa.CDBrowserController;
-import ch.cyberduck.ui.cocoa.CDController;
+import ch.cyberduck.ui.cocoa.application.NSWorkspace;
+import ch.cyberduck.ui.cocoa.foundation.NSDictionary;
+import ch.cyberduck.ui.cocoa.foundation.NSEnumerator;
+import ch.cyberduck.ui.cocoa.foundation.NSObject;
+import ch.cyberduck.ui.cocoa.threading.BrowserBackgroundAction;
 
 import org.apache.log4j.Logger;
+import org.rococoa.Rococoa;
 
 import java.io.File;
 import java.text.MessageFormat;
-import java.util.Enumeration;
 
 /**
  * @version $Id$
  */
-public abstract class Editor extends CDController {
+public abstract class Editor {
     private static Logger log = Logger.getLogger(Editor.class);
 
     private CDBrowserController controller;
@@ -59,9 +59,10 @@ public abstract class Editor extends CDController {
         this.controller = controller;
         this.bundleIdentifier = bundleIdentifier;
         this.edited = path;
-        final Local folder = new Local(new File(new Local(Preferences.instance().getProperty("editor.tmp.directory")).getAbsolute(),
-                edited.getParent().getAbsolute()));
-        this.edited.setLocal(new Local(folder, edited.getName()));
+        final Local folder = LocalFactory.createLocal(
+                new File(Preferences.instance().getProperty("editor.tmp.directory"),
+                        edited.getParent().getAbsolute()));
+        this.edited.setLocal(LocalFactory.createLocal(folder, edited.getName()));
     }
 
     public void open() {
@@ -70,10 +71,12 @@ public abstract class Editor extends CDController {
                 TransferOptions options = new TransferOptions();
                 options.closeSession = false;
                 Transfer download = new DownloadTransfer(edited) {
+                    @Override
                     public TransferAction action(final boolean resumeRequested, final boolean reloadRequested) {
                         return TransferAction.ACTION_RENAME;
                     }
 
+                    @Override
                     protected boolean shouldOpenWhenComplete() {
                         return false;
                     }
@@ -85,11 +88,13 @@ public abstract class Editor extends CDController {
                 }, options);
             }
 
+            @Override
             public String getActivity() {
-                return MessageFormat.format(NSBundle.localizedString("Downloading {0}", "Status", ""),
+                return MessageFormat.format(Locale.localizedString("Downloading {0}", "Status"),
                         edited.getName());
             }
 
+            @Override
             public void cleanup() {
                 if(edited.getStatus().isComplete()) {
                     final Permission permissions = edited.getLocal().attributes.getPermission();
@@ -106,14 +111,15 @@ public abstract class Editor extends CDController {
     }
 
     /**
-     * @return True if the editor is open
+     * @return True if the editor application is running
      */
     public boolean isOpen() {
-        final Enumeration apps = NSWorkspace.sharedWorkspace().launchedApplications().objectEnumerator();
-        while(apps.hasMoreElements()) {
-            NSDictionary app = (NSDictionary) apps.nextElement();
-            final Object identifier = app.objectForKey("NSApplicationBundleIdentifier");
-            if(identifier.equals(bundleIdentifier)) {
+        final NSEnumerator apps = NSWorkspace.sharedWorkspace().launchedApplications().objectEnumerator();
+        NSObject next;
+        while(((next = apps.nextObject()) != null)) {
+            NSDictionary app = Rococoa.cast(next, NSDictionary.class);
+            final NSObject identifier = app.objectForKey("NSApplicationBundleIdentifier");
+            if(identifier.toString().equals(bundleIdentifier)) {
                 return true;
             }
         }
@@ -131,7 +137,6 @@ public abstract class Editor extends CDController {
     protected void delete() {
         log.debug("delete");
         edited.getLocal().delete(Preferences.instance().getBoolean("editor.file.trash"));
-        this.invalidate();
     }
 
     /**
@@ -153,12 +158,13 @@ public abstract class Editor extends CDController {
      */
     protected void save() {
         log.debug("save");
-        edited.getStatus().reset();
         controller.background(new BrowserBackgroundAction(controller) {
             public void run() {
+                edited.getStatus().reset();
                 TransferOptions options = new TransferOptions();
                 options.closeSession = false;
                 Transfer upload = new UploadTransfer(edited) {
+                    @Override
                     public TransferAction action(final boolean resumeRequested, final boolean reloadRequested) {
                         return TransferAction.ACTION_OVERWRITE;
                     }
@@ -170,14 +176,15 @@ public abstract class Editor extends CDController {
                 }, options);
             }
 
+            @Override
             public String getActivity() {
-                return MessageFormat.format(NSBundle.localizedString("Uploading {0}", "Status", ""),
+                return MessageFormat.format(Locale.localizedString("Uploading {0}", "Status"),
                         edited.getName());
             }
 
+            @Override
             public void cleanup() {
                 if(edited.getStatus().isComplete()) {
-                    controller.reloadData(true);
                     if(Editor.this.isDeferredDelete()) {
                         Editor.this.delete();
                     }

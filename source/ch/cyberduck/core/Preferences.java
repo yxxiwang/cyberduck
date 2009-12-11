@@ -18,18 +18,11 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSArray;
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSPathUtilities;
-
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.ui.cocoa.CDBrowserTableDataSource;
-import ch.cyberduck.ui.cocoa.CDPortablePreferencesImpl;
-import ch.cyberduck.ui.cocoa.CDPreferencesImpl;
 
-import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 
-import java.io.File;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
@@ -47,7 +40,8 @@ public abstract class Preferences {
 
     private static Preferences current = null;
 
-    private Map<String, String> defaults;
+    protected Map<String, String> defaults
+            = new HashMap<String, String>();
 
     /**
      * TTL for DNS queries
@@ -65,12 +59,7 @@ public abstract class Preferences {
     public static Preferences instance() {
         synchronized(lock) {
             if(null == current) {
-                if(null == NSBundle.mainBundle().objectForInfoDictionaryKey("application.preferences.path")) {
-                    current = new CDPreferencesImpl();
-                }
-                else {
-                    current = new CDPortablePreferencesImpl();
-                }
+                current = PreferencesFactory.createPreferences();
                 current.load();
                 current.setDefaults();
                 current.legacy();
@@ -91,7 +80,7 @@ public abstract class Preferences {
      * @param property The name of the property to overwrite
      * @param value    The new vlaue
      */
-    public abstract void setProperty(String property, Object value);
+    public abstract void setProperty(String property, String value);
 
     public abstract void deleteProperty(String property);
 
@@ -123,37 +112,21 @@ public abstract class Preferences {
         this.setProperty(property, String.valueOf(v));
     }
 
+    public void setProperty(String property, double v) {
+        this.setProperty(property, String.valueOf(v));
+    }
+
     /**
      * setting the default prefs values
      */
     protected void setDefaults() {
-        this.defaults = new HashMap<String, String>();
-
-        File APP_SUPPORT_DIR;
-        if(null == NSBundle.mainBundle().objectForInfoDictionaryKey("application.support.path")) {
-            APP_SUPPORT_DIR = new File(
-                    NSPathUtilities.stringByExpandingTildeInPath("~/Library/Application Support/Cyberduck"));
-            APP_SUPPORT_DIR.mkdirs();
-        }
-        else {
-            APP_SUPPORT_DIR = new File(
-                    NSPathUtilities.stringByExpandingTildeInPath(
-                            (String) NSBundle.mainBundle().objectForInfoDictionaryKey("application.support.path")));
-        }
-        APP_SUPPORT_DIR.mkdirs();
-
-        defaults.put("application.support.path", APP_SUPPORT_DIR.getAbsolutePath());
+        defaults.put("tmp.dir", System.getProperty("java.io.tmpdir"));
 
         /**
          * The logging level (DEBUG, INFO, WARN, ERROR)
          */
         defaults.put("logging", "ERROR");
 
-        final Logger root = Logger.getRootLogger();
-        root.setLevel(Level.toLevel(this.getProperty("logging")));
-
-        defaults.put("version",
-                NSBundle.mainBundle().objectForInfoDictionaryKey("CFBundleShortVersionString").toString());
         /**
          * How many times the application was launched
          */
@@ -179,11 +152,29 @@ public abstract class Preferences {
         defaults.put("rendezvous.loopback.supress", String.valueOf(true));
 
         defaults.put("growl.enable", String.valueOf(true));
+        defaults.put("growl.limit", String.valueOf(10));
+
+        /**
+         * Normalize path names
+         */
+        defaults.put("path.normalize", String.valueOf(true));
+        defaults.put("path.normalize.unicode", String.valueOf(false));
+
+        defaults.put("local.symboliclink.resolve", String.valueOf(true));
 
         /**
          * Maximum number of directory listings to cache using a most recently used implementation
          */
         defaults.put("browser.cache.size", String.valueOf(1000));
+        defaults.put("transfer.cache.size", String.valueOf(50));
+        defaults.put("icon.cache.size", String.valueOf(50));
+
+        /**
+         * Caching NS* proxy instances.
+         */
+        defaults.put("browser.model.cache.size", String.valueOf(200));
+        defaults.put("bookmark.model.cache.size", String.valueOf(50));
+        defaults.put("queue.model.cache.size", String.valueOf(20));
 
         /**
          * Current default browser view is outline view (0-List view, 1-Outline view, 2-Column view)
@@ -203,7 +194,7 @@ public abstract class Preferences {
         defaults.put("browser.hidden.regex", "\\..*");
 
         defaults.put("browser.openUntitled", String.valueOf(true));
-        defaults.put("browser.defaultBookmark", NSBundle.localizedString("None", ""));
+        defaults.put("browser.defaultBookmark", Locale.localizedString("None"));
 
         defaults.put("browser.markInaccessibleFolders", String.valueOf(true));
         /**
@@ -277,7 +268,7 @@ public abstract class Preferences {
          * Editor for the current selected file. Used to set the shortcut key in the menu delegate
          */
         defaults.put("editor.kqueue.enable", "false");
-        defaults.put("editor.tmp.directory", NSPathUtilities.temporaryDirectory());
+        defaults.put("editor.tmp.directory", System.getProperty("java.io.tmpdir"));
 
         defaults.put("editor.file.trash", "true");
 
@@ -313,7 +304,7 @@ public abstract class Preferences {
         defaults.put("queue.orderFrontOnStart", String.valueOf(true));
         defaults.put("queue.orderBackOnStop", String.valueOf(false));
 
-        if(new File(NSPathUtilities.stringByExpandingTildeInPath("~/Downloads")).exists()) {
+        if(LocalFactory.createLocal("~/Downloads").exists()) {
             // For 10.5 this usually exists and should be preferrred
             defaults.put("queue.download.folder", "~/Downloads");
         }
@@ -400,7 +391,10 @@ public abstract class Preferences {
          */
         defaults.put("ftp.connectmode.fallback", String.valueOf(true));
         /**
-         * Protect the data channel by default
+         * Protect the data channel by default. For TLS, the data connection
+         * can have one of two security levels.
+         1) Clear (requested by 'PROT C')
+         2) Private (requested by 'PROT P')
          */
         defaults.put("ftp.tls.datachannel", "P"); //C
         /**
@@ -450,6 +444,7 @@ public abstract class Preferences {
         defaults.put("webdav.tls.acceptAnyCertificate", String.valueOf(false));
 
         defaults.put("cf.tls.acceptAnyCertificate", String.valueOf(false));
+        defaults.put("cf.list.limit", String.valueOf(10000));
 
         /**
          * NTLM Windows Domain
@@ -486,7 +481,7 @@ public abstract class Preferences {
         defaults.put("connection.retry", String.valueOf(1));
         defaults.put("connection.retry.delay", String.valueOf(10));
 
-        defaults.put("connection.hostname.default", "localhost");
+        defaults.put("connection.hostname.default", "");
         /**
          * Try to resolve the hostname when entered in connection dialog
          */
@@ -507,11 +502,6 @@ public abstract class Preferences {
 
         defaults.put("bookmark.icon.size", String.valueOf(32));
 
-        /**
-         * Normalize path names
-         */
-        defaults.put("path.normalize", String.valueOf(true));
-        defaults.put("path.normalize.unicode", String.valueOf(false));
         /**
          * Use the SFTP subsystem or a SCP channel for file transfers over SSH
          */
@@ -571,27 +561,51 @@ public abstract class Preferences {
     }
 
     public String getProperty(String property) {
-        return this.getObject(property).toString();
+        final Object v = this.getObject(property);
+        if(null == v) {
+            return null;
+        }
+        return v.toString();
     }
 
     public int getInteger(String property) {
-        return Integer.parseInt(this.getObject(property).toString());
+        final Object v = this.getObject(property);
+        if(null == v) {
+            return -1;
+        }
+        return Integer.parseInt(v.toString());
     }
 
     public float getFloat(String property) {
-        return Float.parseFloat(this.getObject(property).toString());
+        final Object v = this.getObject(property);
+        if(null == v) {
+            return -1;
+        }
+        return Float.parseFloat(v.toString());
     }
 
     public long getLong(String property) {
-        return Long.parseLong(this.getObject(property).toString());
+        final Object v = this.getObject(property);
+        if(null == v) {
+            return -1;
+        }
+        return Long.parseLong(v.toString());
     }
 
     public double getDouble(String property) {
-        return Double.parseDouble(this.getObject(property).toString());
+        final Object v = this.getObject(property);
+        if(null == v) {
+            return -1;
+        }
+        return Double.parseDouble(v.toString());
     }
 
     public boolean getBoolean(String property) {
-        String value = this.getObject(property).toString();
+        final Object v = this.getObject(property);
+        if(null == v) {
+            return false;
+        }
+        String value = v.toString();
         if(value.equalsIgnoreCase(String.valueOf(true))) {
             return true;
         }
@@ -626,17 +640,5 @@ public abstract class Preferences {
      * @return The preferred locale of all available in this application bundle
      *         for the currently logged in user
      */
-    private String locale() {
-        String locale = "en";
-        NSArray preferredLocalizations = NSBundle.preferredLocalizations(
-                NSBundle.mainBundle().localizations());
-        if(null == preferredLocalizations) {
-            log.warn("No localizations found in main bundle");
-            return locale;
-        }
-        if(preferredLocalizations.count() > 0) {
-            locale = (String) preferredLocalizations.objectAtIndex(0);
-        }
-        return locale;
-    }
+    protected abstract String locale();
 }

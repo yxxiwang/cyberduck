@@ -11,6 +11,8 @@
 // -----------------------------------------------------------------------------
 
 #import "UKCrashReporter.h"
+#import "UKSystemInfo.h"
+#import <Cocoa/Cocoa.h>
 
 NSString*	UKCrashReporterFindTenFiveCrashReportPath( NSString* appName, NSString* crashLogsFolder );
 
@@ -18,7 +20,7 @@ NSString*	UKCrashReporterFindTenFiveCrashReportPath( NSString* appName, NSString
 
 -(id) init
 {
-	if( self = [super init] )
+	if( (self = [super init]) )
 	{
 		[self checkForCrash];
 	}
@@ -65,12 +67,13 @@ NSString*	UKCrashReporterFindTenFiveCrashReportPath( NSString* appName, NSString
 			NS_VOIDRETURN;
 		}
 		
-		long	sysvMajor = 0, sysvMinor = 0, sysvBugfix = 0;
+		SInt32	sysvMajor = 0, sysvMinor = 0, sysvBugfix = 0;
 		UKGetSystemVersionComponents( &sysvMajor, &sysvMinor, &sysvBugfix );
 		BOOL	isTenFiveOrBetter = sysvMajor >= 10 && sysvMinor >= 5;
 		
 		// Get the log file, its last change date and last report date:
 		NSString*		appName = [[[NSBundle mainBundle] infoDictionary] objectForKey: @"CFBundleExecutable"];
+		NSString*		appRevision = [[[NSBundle mainBundle] infoDictionary] objectForKey: @"CFBundleVersion"];
 		NSString*		crashLogsFolder = [@"~/Library/Logs/CrashReporter/" stringByExpandingTildeInPath];
 		NSString*		crashLogName = [appName stringByAppendingString: @".crash.log"];
 		NSString*		crashLogPath = nil;
@@ -96,7 +99,7 @@ NSString*	UKCrashReporterFindTenFiveCrashReportPath( NSString* appName, NSString
 									@"", appName ) )
 				{
                     // Fetch the newest report from the log:
-                    NSString*			crashLog = [NSString stringWithContentsOfFile: crashLogPath];
+                    NSString*			crashLog = [NSString stringWithContentsOfFile: crashLogPath encoding:NSASCIIStringEncoding error:nil];
                     NSArray*			separateReports = [crashLog componentsSeparatedByString: @"\n\n**********\n\n"];
                     NSString*			currentReport = [separateReports count] > 0 ? [separateReports objectAtIndex: [separateReports count] -1] : @"*** Couldn't read Report ***";	// 1 since report 0 is empty (file has a delimiter at the top).
 					NSData*				crashReport = [currentReport dataUsingEncoding: NSUTF8StringEncoding];	// 1 since report 0 is empty (file has a delimiter at the top).
@@ -104,7 +107,8 @@ NSString*	UKCrashReporterFindTenFiveCrashReportPath( NSString* appName, NSString
                     NSString            *boundary = @"0xKhTmLbOuNdArY";
 
                     // Prepare a request:
-                    NSMutableURLRequest *postRequest = [NSMutableURLRequestClass requestWithURL:[NSURL URLWithString: @"http://crash.cyberduck.ch/report/"]];
+                    NSString            *url = [[@"http://crash.cyberduck.ch/report" stringByAppendingString:@"?revision="] stringByAppendingString:appRevision];
+                    NSMutableURLRequest *postRequest = [NSMutableURLRequestClass requestWithURL:[NSURL URLWithString: url]];
                     NSString            *contentType = [NSString stringWithFormat:@"multipart/form-data; boundary=%@",boundary];
                     NSString			*agent = [NSString stringWithFormat:@"Cyberduck (%@)", [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"]];
 
@@ -136,7 +140,7 @@ NSString*	UKCrashReporterFindTenFiveCrashReportPath( NSString* appName, NSString
 		NSLog(@"Error during check for crash: %@",localException);
 	NS_ENDHANDLER
 	
-	[pool release];
+	[pool drain];
 }
 
 NSString*	UKCrashReporterFindTenFiveCrashReportPath( NSString* appName, NSString* crashLogsFolder )

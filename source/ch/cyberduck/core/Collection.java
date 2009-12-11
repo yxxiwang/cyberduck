@@ -33,6 +33,7 @@ public class Collection<E> extends ArrayList<E> implements CollectionListener<E>
         super(c);
     }
 
+    @Override
     public int indexOf(Object elem) {
         for(int i = 0; i < this.size(); i++) {
             if(this.get(i).equals(elem)) {
@@ -42,6 +43,7 @@ public class Collection<E> extends ArrayList<E> implements CollectionListener<E>
         return -1;
     }
 
+    @Override
     public int lastIndexOf(Object elem) {
         for(int i = this.size() - 1; i >= 0; i--) {
             if(this.get(i).equals(elem)) {
@@ -62,33 +64,49 @@ public class Collection<E> extends ArrayList<E> implements CollectionListener<E>
         listeners.remove(listener);
     }
 
+    @Override
+    public boolean addAll(java.util.Collection<? extends E> es) {
+        super.addAll(es);
+        for(E item : es) {
+            this.collectionItemAdded(item);
+        }
+        return true;
+    }
+
+    @Override
     public boolean add(E object) {
         super.add(object);
         this.collectionItemAdded(object);
         return true;
     }
 
+    @Override
     public void add(int row, E object) {
         super.add(row, object);
         this.collectionItemAdded(object);
     }
 
+    @Override
     public E get(int row) {
         return super.get(row);
     }
 
+    @Override
     public Iterator<E> iterator() {
         return super.iterator();
     }
 
+    @Override
     public int size() {
         return super.size();
     }
 
+    @Override
     public boolean contains(Object o) {
         return super.contains(o);
     }
 
+    @Override
     public void clear() {
         for(E o : this) {
             this.collectionItemRemoved(o);
@@ -100,39 +118,35 @@ public class Collection<E> extends ArrayList<E> implements CollectionListener<E>
      * @param row
      * @return the element that was removed from the list.
      */
+    @Override
     public E remove(int row) {
         E previous = super.remove(row);
         this.collectionItemRemoved(previous);
         return previous;
     }
 
+    @Override
     public boolean remove(Object item) {
         boolean previous = super.remove(item);
-        this.collectionItemRemoved((E)item);
+        this.collectionItemRemoved((E) item);
         return previous;
     }
 
     public void collectionItemAdded(E item) {
-        CollectionListener<E>[] l = listeners.toArray(
-                new CollectionListener[listeners.size()]);
-        for(int i = 0; i < l.length; i++) {
-            l[i].collectionItemAdded(item);
+        for(CollectionListener<E> listener : listeners.toArray(new CollectionListener[listeners.size()])) {
+            listener.collectionItemAdded(item);
         }
     }
 
     public void collectionItemRemoved(E item) {
-        CollectionListener<E>[] l = listeners.toArray(
-                new CollectionListener[listeners.size()]);
-        for(int i = 0; i < l.length; i++) {
-            l[i].collectionItemRemoved(item);
+        for(CollectionListener<E> listener : listeners.toArray(new CollectionListener[listeners.size()])) {
+            listener.collectionItemRemoved(item);
         }
     }
 
     public void collectionItemChanged(E item) {
-        CollectionListener<E>[] l = listeners.toArray(
-                new CollectionListener[listeners.size()]);
-        for(int i = 0; i < l.length; i++) {
-            l[i].collectionItemChanged(item);
+        for(CollectionListener<E> listener : listeners.toArray(new CollectionListener[listeners.size()])) {
+            listener.collectionItemChanged(item);
         }
     }
 }

@@ -18,13 +18,14 @@ package ch.cyberduck.core.davs;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSDictionary;
-
-import ch.cyberduck.core.*;
+import ch.cyberduck.core.Local;
+import ch.cyberduck.core.Path;
+import ch.cyberduck.core.PathFactory;
+import ch.cyberduck.core.Protocol;
 import ch.cyberduck.core.dav.DAVPath;
 
 /**
- * @version $Id:$
+ * @version $Id$
  */
 public class DAVSPath extends DAVPath {
 
@@ -32,21 +33,25 @@ public class DAVSPath extends DAVPath {
         PathFactory.addFactory(Protocol.WEBDAV_SSL, new Factory());
     }
 
-    private static class Factory extends PathFactory {
-        protected Path create(Session session, String path, int type) {
-            return new DAVSPath((DAVSSession) session, path, type);
+    private static class Factory extends PathFactory<DAVSSession> {
+        @Override
+        protected Path create(DAVSSession session, String path, int type) {
+            return new DAVSPath(session, path, type);
         }
 
-        protected Path create(Session session, String parent, String name, int type) {
-            return new DAVSPath((DAVSSession) session, parent, name, type);
+        @Override
+        protected Path create(DAVSSession session, String parent, String name, int type) {
+            return new DAVSPath(session, parent, name, type);
         }
 
-        protected Path create(Session session, String path, Local file) {
-            return new DAVSPath((DAVSSession) session, path, file);
+        @Override
+        protected Path create(DAVSSession session, String path, Local file) {
+            return new DAVSPath(session, path, file);
         }
 
-        protected Path create(Session session, NSDictionary dict) {
-            return new DAVSPath((DAVSSession) session, dict);
+        @Override
+        protected <T> Path create(DAVSSession session, T dict) {
+            return new DAVSPath(session, dict);
         }
     }
 
@@ -62,7 +67,7 @@ public class DAVSPath extends DAVPath {
         super(s, parent, file);
     }
 
-    protected DAVSPath(DAVSSession s, NSDictionary dict) {
+    protected <T> DAVSPath(DAVSSession s, T dict) {
         super(s, dict);
     }
 }

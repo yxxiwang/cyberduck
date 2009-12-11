@@ -18,14 +18,12 @@ package ch.cyberduck.core.ec;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSDictionary;
-
-import ch.cyberduck.core.*;
+import ch.cyberduck.core.Local;
+import ch.cyberduck.core.Path;
+import ch.cyberduck.core.PathFactory;
+import ch.cyberduck.core.Protocol;
 import ch.cyberduck.core.cloud.Distribution;
 import ch.cyberduck.core.s3.S3Path;
-
-import org.jets3t.service.model.S3Object;
-import org.jets3t.service.S3ServiceException;
 
 /**
  * @version $Id$
@@ -36,21 +34,25 @@ public class ECPath extends S3Path {
         PathFactory.addFactory(Protocol.EUCALYPTUS, new Factory());
     }
 
-    private static class Factory extends PathFactory {
-        protected Path create(Session session, String path, int type) {
-            return new ECPath((ECSession) session, path, type);
+    private static class Factory extends PathFactory<ECSession> {
+        @Override
+        protected Path create(ECSession session, String path, int type) {
+            return new ECPath(session, path, type);
         }
 
-        protected Path create(Session session, String parent, String name, int type) {
-            return new ECPath((ECSession) session, parent, name, type);
+        @Override
+        protected Path create(ECSession session, String parent, String name, int type) {
+            return new ECPath(session, parent, name, type);
         }
 
-        protected Path create(Session session, String path, Local file) {
-            return new ECPath((ECSession) session, path, file);
+        @Override
+        protected Path create(ECSession session, String path, Local file) {
+            return new ECPath(session, path, file);
         }
 
-        protected Path create(Session session, NSDictionary dict) {
-            return new ECPath((ECSession) session, dict);
+        @Override
+        protected <T> Path create(ECSession session, T dict) {
+            return new ECPath(session, dict);
         }
     }
 
@@ -66,29 +68,7 @@ public class ECPath extends S3Path {
         super(s, parent, file);
     }
 
-    protected ECPath(ECSession s, NSDictionary dict) {
+    protected <T> ECPath(ECSession s, T dict) {
         super(s, dict);
-    }
-
-    protected S3Object getDetails() throws S3ServiceException {
-        return null;
-    }
-
-    /**
-     * @return
-     */
-    public Distribution readDistribution() {
-        throw new UnsupportedOperationException();
-    }
-
-    /**
-     * Amazon CloudFront Extension
-     *
-     * @param enabled
-     * @param cnames
-     * @param logging
-     */
-    public void writeDistribution(final boolean enabled, final String[] cnames, boolean logging) {
-        throw new UnsupportedOperationException();
     }
 }

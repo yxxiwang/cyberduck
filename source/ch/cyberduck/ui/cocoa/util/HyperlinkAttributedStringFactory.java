@@ -1,10 +1,5 @@
 package ch.cyberduck.ui.cocoa.util;
 
-import com.apple.cocoa.application.NSColor;
-import com.apple.cocoa.foundation.NSAttributedString;
-import com.apple.cocoa.foundation.NSDictionary;
-import com.apple.cocoa.foundation.NSMutableAttributedString;
-import com.apple.cocoa.foundation.NSRange;
 /*
  *  Copyright (c) 2008 David Kocher. All rights reserved.
  *  http://cyberduck.ch/
@@ -23,18 +18,29 @@ import com.apple.cocoa.foundation.NSRange;
  *  dkocher@cyberduck.ch
  */
 
+import ch.cyberduck.ui.cocoa.application.NSColor;
+import ch.cyberduck.ui.cocoa.foundation.NSAttributedString;
+import ch.cyberduck.ui.cocoa.foundation.NSMutableAttributedString;
+import ch.cyberduck.ui.cocoa.foundation.NSRange;
+import ch.cyberduck.ui.cocoa.foundation.NSNumber;
+
+import org.rococoa.cocoa.foundation.NSUInteger;
+
 /**
  * From http://developer.apple.com/qa/qa2006/qa1487.html
  *
- * @version $Id:$
+ * @version $Id$
  */
 public class HyperlinkAttributedStringFactory {
 
     /**
+     *
+     * @param value
      * @param hyperlink
+     * @return
      */
     public static NSAttributedString create(final NSMutableAttributedString value, final String hyperlink) {
-        NSRange range = new NSRange(0, value.length());
+        final NSRange range = NSRange.NSMakeRange(new NSUInteger(0), value.length());
         value.beginEditing();
         value.addAttributeInRange(NSMutableAttributedString.LinkAttributeName,
                 hyperlink, range);
@@ -44,7 +50,7 @@ public class HyperlinkAttributedStringFactory {
 
         // next make the text appear with an underline
         value.addAttributeInRange(NSMutableAttributedString.UnderlineStyleAttributeName,
-                NSMutableAttributedString.SingleUnderlineStyle, range);
+                NSNumber.numberWithInt(NSMutableAttributedString.SingleUnderlineStyle), range);
 
         value.endEditing();
         return value;

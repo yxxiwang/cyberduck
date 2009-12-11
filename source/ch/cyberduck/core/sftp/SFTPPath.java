@@ -18,14 +18,13 @@ package ch.cyberduck.core.sftp;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSDictionary;
-
 import ch.cyberduck.core.*;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.core.io.BandwidthThrottle;
 import ch.cyberduck.core.io.IOResumeException;
 
 import org.apache.log4j.Logger;
+import org.apache.commons.io.IOUtils;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -50,21 +49,25 @@ public class SFTPPath extends Path {
         PathFactory.addFactory(Protocol.SFTP, new Factory());
     }
 
-    private static class Factory extends PathFactory {
-        protected Path create(Session session, String path, int type) {
-            return new SFTPPath((SFTPSession) session, path, type);
+    private static class Factory extends PathFactory<SFTPSession> {
+        @Override
+        protected Path create(SFTPSession session, String path, int type) {
+            return new SFTPPath(session, path, type);
         }
 
-        protected Path create(Session session, String parent, String name, int type) {
-            return new SFTPPath((SFTPSession) session, parent, name, type);
+        @Override
+        protected Path create(SFTPSession session, String parent, String name, int type) {
+            return new SFTPPath(session, parent, name, type);
         }
 
-        protected Path create(Session session, String path, Local file) {
-            return new SFTPPath((SFTPSession) session, path, file);
+        @Override
+        protected Path create(SFTPSession session, String path, Local file) {
+            return new SFTPPath(session, path, file);
         }
 
-        protected Path create(Session session, NSDictionary dict) {
-            return new SFTPPath((SFTPSession) session, dict);
+        @Override
+        protected <T> Path create(SFTPSession session, T dict) {
+            return new SFTPPath(session, dict);
         }
     }
 
@@ -85,20 +88,22 @@ public class SFTPPath extends Path {
         this.session = s;
     }
 
-    private SFTPPath(SFTPSession s, NSDictionary dict) {
+    private <T> SFTPPath(SFTPSession s, T dict) {
         super(dict);
         this.session = s;
     }
 
+    @Override
     public Session getSession() {
         return this.session;
     }
 
+    @Override
     public AttributedList<Path> list() {
         final AttributedList<Path> childs = new AttributedList<Path>();
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Listing directory {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Listing directory {0}", "Status"),
                     this.getName()));
 
             List<SFTPv3DirectoryEntry> children = session.sftp().ls(this.getAbsolute());
@@ -128,7 +133,7 @@ public class SFTPPath extends Path {
                             if(!target.startsWith("/")) {
                                 target = Path.normalize(this.getAbsolute() + Path.DELIMITER + target);
                             }
-                            p.setSymbolicLinkPath(target);
+                            p.setSymlinkTarget(target);
                             SFTPv3FileAttributes attr = session.sftp().stat(target);
                             if(attr.isDirectory()) {
                                 p.attributes.setType(Path.SYMBOLIC_LINK_TYPE | Path.DIRECTORY_TYPE);
@@ -149,6 +154,7 @@ public class SFTPPath extends Path {
                     childs.add(p);
                 }
             }
+            session.setWorkdir(this);
         }
         catch(IOException e) {
             childs.attributes().setReadable(false);
@@ -157,6 +163,7 @@ public class SFTPPath extends Path {
         return childs;
     }
 
+    @Override
     public void mkdir(boolean recursive) {
         log.debug("mkdir:" + this.getName());
         try {
@@ -166,7 +173,7 @@ public class SFTPPath extends Path {
                 }
             }
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Making directory {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Making directory {0}", "Status"),
                     this.getName()));
 
             Permission perm = new Permission(Preferences.instance().getInteger("queue.upload.permissions.folder.default"));
@@ -177,10 +184,11 @@ public class SFTPPath extends Path {
         }
     }
 
+    @Override
     public void rename(AbstractPath renamed) {
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Renaming {0} to {1}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Renaming {0} to {1}", "Status"),
                     this.getName(), renamed));
 
             if(renamed.exists()) {
@@ -199,12 +207,13 @@ public class SFTPPath extends Path {
         }
     }
 
+    @Override
     public void delete() {
         log.debug("delete:" + this.toString());
         try {
             session.check();
             if(this.attributes.isFile() || this.attributes.isSymbolicLink()) {
-                session.message(MessageFormat.format(NSBundle.localizedString("Deleting {0}", "Status", ""),
+                session.message(MessageFormat.format(Locale.localizedString("Deleting {0}", "Status"),
                         this.getName()));
 
                 session.sftp().rm(this.getAbsolute());
@@ -216,7 +225,7 @@ public class SFTPPath extends Path {
                     }
                     child.delete();
                 }
-                session.message(MessageFormat.format(NSBundle.localizedString("Deleting {0}", "Status", ""),
+                session.message(MessageFormat.format(Locale.localizedString("Deleting {0}", "Status"),
                         this.getName()));
 
                 session.sftp().rmdir(this.getAbsolute());
@@ -232,6 +241,7 @@ public class SFTPPath extends Path {
         }
     }
 
+    @Override
     public void readSize() {
         if(this.attributes.isFile()) {
             SFTPv3FileHandle handle = null;
@@ -239,7 +249,7 @@ public class SFTPPath extends Path {
                 session.check();
                 handle = session.sftp().openFileRO(this.getAbsolute());
                 SFTPv3FileAttributes attr = session.sftp().fstat(handle);
-                session.message(MessageFormat.format(NSBundle.localizedString("Getting size of {0}", "Status", ""),
+                session.message(MessageFormat.format(Locale.localizedString("Getting size of {0}", "Status"),
                         this.getName()));
 
                 this.attributes.setSize(attr.size);
@@ -262,12 +272,13 @@ public class SFTPPath extends Path {
         }
     }
 
+    @Override
     public void readTimestamp() {
         if(this.attributes.isFile()) {
             SFTPv3FileHandle handle = null;
             try {
                 session.check();
-                session.message(MessageFormat.format(NSBundle.localizedString("Getting timestamp of {0}", "Status", ""),
+                session.message(MessageFormat.format(Locale.localizedString("Getting timestamp of {0}", "Status"),
                         this.getName()));
 
                 handle = session.sftp().openFileRO(this.getAbsolute());
@@ -291,12 +302,13 @@ public class SFTPPath extends Path {
         }
     }
 
+    @Override
     public void readPermission() {
         if(this.attributes.isFile()) {
             SFTPv3FileHandle handle = null;
             try {
                 session.check();
-                session.message(MessageFormat.format(NSBundle.localizedString("Getting permission of {0}", "Status", ""),
+                session.message(MessageFormat.format(Locale.localizedString("Getting permission of {0}", "Status"),
                         this.getName()));
 
                 handle = session.sftp().openFileRO(this.getAbsolute());
@@ -306,7 +318,7 @@ public class SFTPPath extends Path {
                     this.attributes.setPermission(new Permission(Integer.parseInt(perm.substring(perm.length() - 3))));
                 }
                 catch(NumberFormatException e) {
-                    this.attributes.setPermission(Permission.EMPTY);
+                    log.error(e.getMessage());
                 }
                 session.sftp().closeFile(handle);
             }
@@ -326,11 +338,12 @@ public class SFTPPath extends Path {
         }
     }
 
+    @Override
     public void writeOwner(String owner, boolean recursive) {
         log.debug("changeOwner");
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Changing owner of {0} to {1}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Changing owner of {0} to {1}", "Status"),
                     this.getName(), owner));
 
 
@@ -356,11 +369,12 @@ public class SFTPPath extends Path {
         }
     }
 
+    @Override
     public void writeGroup(String group, boolean recursive) {
         log.debug("changeGroup");
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Changing group of {0} to {1}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Changing group of {0} to {1}", "Status"),
                     this.getName(), group));
 
             SFTPv3FileAttributes attr = new SFTPv3FileAttributes();
@@ -385,25 +399,26 @@ public class SFTPPath extends Path {
         }
     }
 
+    @Override
     public void writePermissions(Permission perm, boolean recursive) {
         log.debug("changePermissions");
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Changing permission of {0} to {1}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Changing permission of {0} to {1}", "Status"),
                     this.getName(), perm.getOctalString()));
 
             SFTPv3FileAttributes attr = new SFTPv3FileAttributes();
-            if(recursive && this.attributes.isFile()) {
+            if(recursive && attributes.isFile()) {
                 // Do not write executable bit for files if not already set when recursively updating directory.
                 // See #1787
                 Permission modified = new Permission(perm);
-                if(!this.attributes.getPermission().getOwnerPermissions()[Permission.EXECUTE]) {
+                if(!attributes.getPermission().getOwnerPermissions()[Permission.EXECUTE]) {
                     modified.getOwnerPermissions()[Permission.EXECUTE] = false;
                 }
-                if(!this.attributes.getPermission().getGroupPermissions()[Permission.EXECUTE]) {
+                if(!attributes.getPermission().getGroupPermissions()[Permission.EXECUTE]) {
                     modified.getGroupPermissions()[Permission.EXECUTE] = false;
                 }
-                if(!this.attributes.getPermission().getOtherPermissions()[Permission.EXECUTE]) {
+                if(!attributes.getPermission().getOtherPermissions()[Permission.EXECUTE]) {
                     modified.getOtherPermissions()[Permission.EXECUTE] = false;
                 }
                 attr.permissions = modified.getOctalNumber();
@@ -411,8 +426,9 @@ public class SFTPPath extends Path {
             else {
                 attr.permissions = perm.getOctalNumber();
             }
-            session.sftp().setstat(this.getAbsolute(), attr);
-            if(this.attributes.isDirectory()) {
+            session.sftp().setstat(getAbsolute(), attr);
+            attributes.setPermission(perm);
+            if(attributes.isDirectory()) {
                 if(recursive) {
                     for(AbstractPath child : this.childs()) {
                         if(!session.isConnected()) {
@@ -420,7 +436,6 @@ public class SFTPPath extends Path {
                         }
                         child.writePermissions(perm, recursive);
                     }
-                    this.invalidate();
                 }
             }
         }
@@ -429,6 +444,7 @@ public class SFTPPath extends Path {
         }
     }
 
+    @Override
     public void download(BandwidthThrottle throttle, StreamListener listener, final boolean check) {
         log.debug("download:" + this.toString());
         InputStream in = null;
@@ -437,7 +453,7 @@ public class SFTPPath extends Path {
             if(check) {
                 session.check();
             }
-            if(this.attributes.isFile()) {
+            if(attributes.isFile()) {
                 if(Preferences.instance().getProperty("ssh.transfer").equals(Protocol.SFTP.getIdentifier())) {
                     SFTPv3FileHandle handle = session.sftp().openFileRO(this.getAbsolute());
                     in = new SFTPInputStream(handle);
@@ -465,22 +481,12 @@ public class SFTPPath extends Path {
             this.error("Download failed", e);
         }
         finally {
-            try {
-                if(in != null) {
-                    in.close();
-                    in = null;
-                }
-                if(out != null) {
-                    out.close();
-                    out = null;
-                }
-            }
-            catch(IOException e) {
-                log.error(e.getMessage());
-            }
+            IOUtils.closeQuietly(in);
+            IOUtils.closeQuietly(out);
         }
     }
 
+    @Override
     public void upload(BandwidthThrottle throttle, StreamListener listener, final Permission p, final boolean check) {
         log.debug("upload:" + this.toString());
         InputStream in = null;
@@ -575,14 +581,8 @@ public class SFTPPath extends Path {
                 if(handle != null) {
                     session.sftp().closeFile(handle);
                 }
-                if(in != null) {
-                    in.close();
-                    in = null;
-                }
-                if(out != null) {
-                    out.close();
-                    out = null;
-                }
+                IOUtils.closeQuietly(in);
+                IOUtils.closeQuietly(out);
             }
             catch(IOException e) {
                 log.error(e.getMessage());

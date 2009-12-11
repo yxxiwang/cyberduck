@@ -18,21 +18,17 @@ package ch.cyberduck.ui.cocoa.odb;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-
-import ch.cyberduck.ui.cocoa.CDBrowserController;
+import ch.cyberduck.core.Native;
 import ch.cyberduck.core.Path;
+import ch.cyberduck.ui.cocoa.CDBrowserController;
 
 import org.apache.log4j.Logger;
 
 /**
- * @version $Id:$
+ * @version $Id$
  */
 public class ODBEditor extends Editor {
     private static Logger log = Logger.getLogger(ODBEditor.class);
-
-    private static boolean JNI_LOADED = false;
-    private static final Object lock = new Object();
 
     /**
      * @param c
@@ -42,21 +38,11 @@ public class ODBEditor extends Editor {
         super(c, bundleIdentifier, path);
     }
 
-    private static boolean jni_load() {
+    private static boolean JNI_LOADED = false;
+
+    private static boolean loadNative() {
         if(!JNI_LOADED) {
-            try {
-                synchronized(lock) {
-                    NSBundle bundle = NSBundle.mainBundle();
-                    String lib = bundle.resourcePath() + "/Java/" + "libODBEdit.dylib";
-                    log.info("Locating libODBEdit.dylib at '" + lib + "'");
-                    System.load(lib);
-                    JNI_LOADED = true;
-                    log.info("libODBEdit.dylib loaded");
-                }
-            }
-            catch(UnsatisfiedLinkError e) {
-                log.error("Could not load the libODBEdit.dylib library:" + e.getMessage());
-            }
+            JNI_LOADED = Native.load("ODBEdit");
         }
         return JNI_LOADED;
     }
@@ -64,8 +50,9 @@ public class ODBEditor extends Editor {
     /**
      * Open the file using the ODB external editor protocol
      */
+    @Override
     public void edit() {
-        if(!ODBEditor.jni_load()) {
+        if(!ODBEditor.loadNative()) {
             return;
         }
         this.edit(edited.getLocal().getAbsolute(), bundleIdentifier);
@@ -91,7 +78,6 @@ public class ODBEditor extends Editor {
             this.delete();
         }
     }
-
 
     /**
      * called by the native editor when the file has been saved

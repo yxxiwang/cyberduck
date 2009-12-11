@@ -18,16 +18,19 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSAttributedString;
-
-import ch.cyberduck.core.*;
+import ch.cyberduck.core.Path;
+import ch.cyberduck.core.PathFilter;
+import ch.cyberduck.core.Status;
+import ch.cyberduck.core.Transfer;
+import ch.cyberduck.ui.cocoa.foundation.NSAttributedString;
+import ch.cyberduck.ui.cocoa.foundation.NSObject;
 
 /**
  * @version $Id$
  */
 public class CDUploadPromptModel extends CDTransferPromptModel {
 
-    public CDUploadPromptModel(CDWindowController c, Transfer transfer) {
+    public CDUploadPromptModel(CDTransferPrompt c, Transfer transfer) {
         super(c, transfer);
     }
 
@@ -35,39 +38,40 @@ public class CDUploadPromptModel extends CDTransferPromptModel {
      * Filtering what files are displayed. Used to
      * decide which files to include in the prompt dialog
      */
-    private PathFilter<Path> filter;
-
-    protected PathFilter<Path> filter() {
-        if(null == filter) {
-            filter = new PromptFilter() {
-                public boolean accept(Path child) {
-                    log.debug("accept:" + child);
-                    if(transfer.exists(child)) {
-                        return super.accept(child);
-                    }
-                    return false;
-                }
-            };
+    private PathFilter<Path> filter = new PromptFilter() {
+        @Override
+        public boolean accept(Path child) {
+            log.debug("accept:" + child);
+            if(child.exists()) {
+                return super.accept(child);
+            }
+            return false;
         }
+    };
+
+    @Override
+    protected PathFilter<Path> filter() {
         return filter;
     }
 
-    protected Object objectValueForItem(final Path item, final String identifier) {
-        if(null != item) {
+    @Override
+    protected NSObject objectValueForItem(final Path item, final String identifier) {
+        final NSObject cached = tableViewCache.get(item, identifier);
+        if(null == cached) {
             if(identifier.equals(CDTransferPromptModel.WARNING_COLUMN)) {
                 if(item.attributes.isFile()) {
                     if(item.getLocal().attributes.getSize() == 0) {
-                        return ALERT_ICON;
+                        return tableViewCache.put(item, identifier, ALERT_ICON);
                     }
                     if(item.attributes.getSize() > item.getLocal().attributes.getSize()) {
-                        return ALERT_ICON;
+                        return tableViewCache.put(item, identifier, ALERT_ICON);
                     }
                 }
-                return null;
+                return tableViewCache.put(item, identifier, null);
             }
             if(identifier.equals(CDTransferPromptModel.SIZE_COLUMN)) {
-                return new NSAttributedString(Status.getSizeAsString(item.attributes.getSize()),
-                        CDTableCellAttributes.browserFontRightAlignment());
+                return tableViewCache.put(item, identifier, NSAttributedString.attributedStringWithAttributes(Status.getSizeAsString(item.attributes.getSize()),
+                        CDTableCellAttributes.browserFontRightAlignment()));
             }
         }
         return super.objectValueForItem(item, identifier);

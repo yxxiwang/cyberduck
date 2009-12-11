@@ -18,10 +18,6 @@ package ch.cyberduck.core.ftps;
  *  dkocher@cyberduck.ch
  */
 
-import com.enterprisedt.net.ftp.FTPClient;
-import com.enterprisedt.net.ftp.FTPException;
-import com.enterprisedt.net.ftp.FTPMessageListener;
-
 import ch.cyberduck.core.Preferences;
 import ch.cyberduck.core.ssl.CustomTrustSSLProtocolSocketFactory;
 
@@ -29,6 +25,10 @@ import org.apache.log4j.Logger;
 
 import javax.net.ssl.X509TrustManager;
 import java.io.IOException;
+
+import com.enterprisedt.net.ftp.FTPClient;
+import com.enterprisedt.net.ftp.FTPException;
+import com.enterprisedt.net.ftp.FTPMessageListener;
 
 /**
  * @version $Id$
@@ -45,12 +45,10 @@ public class FTPSClient extends FTPClient {
      * @throws IOException
      * @throws FTPException
      */
-    public void auth() throws IOException, FTPException {
+    protected void auth() throws IOException, FTPException {
         lastValidReply = control.validateReply(control.sendCommand("AUTH TLS"), "234");
 
         ((FTPSControlSocket) this.control).startHandshake();
-
-        this.prot();
     }
 
     /**
@@ -60,7 +58,7 @@ public class FTPSClient extends FTPClient {
      * 1) Clear (requested by 'PROT C')
      * 2) Private (requested by 'PROT P')
      */
-    private void prot() throws IOException, FTPException {
+    protected void prot() throws IOException, FTPException {
         lastValidReply = control.validateReply(control.sendCommand("PBSZ 0"), "200");
         try {
             lastValidReply = control.validateReply(control.sendCommand("PROT "

@@ -18,7 +18,7 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
+import ch.cyberduck.core.i18n.Locale;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
@@ -37,17 +37,20 @@ public abstract class Archive {
 
     public static final Archive TAR
             = new Archive("tar") {
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("tar archive", "Archive", "");
+            return Locale.localizedString("tar archive", "Archive");
         }
     };
 
     public static final Archive TARGZ
             = new Archive("tar.gz") {
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("gzip compressed tar archive", "Archive", "");
+            return Locale.localizedString("gzip compressed tar archive", "Archive");
         }
 
+        @Override
         public String[] getExtensions() {
             return new String[]{this.getIdentifier(), "tgz"};
         }
@@ -55,10 +58,12 @@ public abstract class Archive {
 
     public static final Archive TARBZ2
             = new Archive("tar.bz2") {
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("bzip2 compressed tar archive", "Archive", "");
+            return Locale.localizedString("bzip2 compressed tar archive", "Archive");
         }
 
+        @Override
         public String[] getExtensions() {
             return new String[]{this.getIdentifier(), "tbz", "tbz2"};
         }
@@ -66,17 +71,20 @@ public abstract class Archive {
 
     public static final Archive ZIP
             = new Archive("zip") {
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("ZIP archive", "Archive", "");
+            return Locale.localizedString("ZIP archive", "Archive");
         }
     };
 
     public static final Archive GZIP
             = new Archive("gz") {
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("gzip compressed tar archive", "Archive", "");
+            return Locale.localizedString("gzip compressed tar archive", "Archive");
         }
 
+        @Override
         public String[] getExtensions() {
             return new String[]{this.getIdentifier(), "gzip"};
         }
@@ -84,10 +92,12 @@ public abstract class Archive {
 
     public static final Archive BZ2
             = new Archive("bz2") {
+        @Override
         public String getDescription() {
-            return NSBundle.localizedString("bzip2 compressed archive", "Archive", "");
+            return Locale.localizedString("bzip2 compressed archive", "Archive");
         }
 
+        @Override
         public String[] getExtensions() {
             return new String[]{this.getIdentifier(), "bz", "bzip2"};
         }
@@ -114,11 +124,12 @@ public abstract class Archive {
      * @return
      */
     public static Archive forName(final String name) {
-        final Archive[] archives = getKnownArchives();
-        for(int i = 0; i < archives.length; i++) {
-            for(int k = 0; k < archives[i].getExtensions().length; k++) {
-                if(name.endsWith(archives[i].getExtensions()[k])) {
-                    return archives[i];
+        if(StringUtils.isNotBlank(name)) {
+            for(Archive archive : getKnownArchives()) {
+                for(String extension : archive.getExtensions()) {
+                    if(name.toLowerCase().endsWith(extension.toLowerCase())) {
+                        return archive;
+                    }
                 }
             }
         }
@@ -132,7 +143,7 @@ public abstract class Archive {
     private String identifier;
 
     /**
-     * @param path
+     * @param extension
      */
     private Archive(final String extension) {
         this.identifier = extension;
@@ -169,7 +180,7 @@ public abstract class Archive {
                     Path.FILE_TYPE);
         }
         return PathFactory.createPath(files.get(0).getSession(), files.get(0).getParent().getAbsolute(),
-                NSBundle.localizedString("Archive", "Archive", "") + "." + this.getIdentifier(),
+                Locale.localizedString("Archive", "Archive") + "." + this.getIdentifier(),
                 Path.FILE_TYPE);
     }
 
@@ -241,11 +252,9 @@ public abstract class Archive {
      */
     public static boolean isArchive(final String filename) {
         if(StringUtils.isNotBlank(filename)) {
-            Archive[] archives = getKnownArchives();
-            for(int i = 0; i < archives.length; i++) {
-                String[] extensions = archives[i].getExtensions();
-                for(int k = 0; k < extensions.length; k++) {
-                    if(filename.endsWith(extensions[k])) {
+            for(Archive archive : getKnownArchives()) {
+                for(String extension : archive.getExtensions()) {
+                    if(filename.endsWith(extension)) {
                         return true;
                     }
                 }

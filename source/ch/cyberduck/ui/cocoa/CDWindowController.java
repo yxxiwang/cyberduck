@@ -18,15 +18,22 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.*;
-import com.apple.cocoa.foundation.*;
-
 import ch.cyberduck.core.Preferences;
-import ch.cyberduck.ui.cocoa.threading.BackgroundAction;
+import ch.cyberduck.core.i18n.Locale;
+import ch.cyberduck.core.threading.MainAction;
+import ch.cyberduck.ui.cocoa.application.*;
+import ch.cyberduck.ui.cocoa.foundation.NSArray;
+import ch.cyberduck.ui.cocoa.foundation.NSNotification;
+import ch.cyberduck.ui.cocoa.foundation.NSNotificationCenter;
+import ch.cyberduck.ui.cocoa.foundation.NSURL;
 import ch.cyberduck.ui.cocoa.threading.WindowMainAction;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
+import org.rococoa.Foundation;
+import org.rococoa.Rococoa;
+import org.rococoa.cocoa.foundation.NSPoint;
+import org.rococoa.cocoa.foundation.NSUInteger;
 
 import java.util.Collections;
 import java.util.HashSet;
@@ -35,75 +42,29 @@ import java.util.Set;
 /**
  * @version $Id$
  */
-public abstract class CDWindowController extends CDBundleController {
+public abstract class CDWindowController extends CDBundleController implements NSWindow.Delegate {
     private static Logger log = Logger.getLogger(CDWindowController.class);
 
-    protected static final String DEFAULT = NSBundle.localizedString("Default", "");
+    protected static final String DEFAULT = Locale.localizedString("Default");
 
     public CDWindowController() {
         super();
     }
 
-    /**
-     * Called by the runtime after the NIB file has been loaded sucessfully
-     */
-    public abstract void awakeFromNib();
-
-    /**
-     * Will queue up the <code>BackgroundAction</code> to be run in a background thread. Will be executed
-     * as soon as no other previous <code>BackgroundAction</code> is pending.
-     *
-     * @param runnable The runnable to execute in a secondary Thread
-     * @return Will return immediatly but not run the runnable before the lock of the runnable is acquired.
-     * @see java.lang.Thread
-     * @see ch.cyberduck.ui.cocoa.threading.BackgroundAction#lock()
-     */
-    public void background(final BackgroundAction runnable) {
-        runnable.init();
-        // Start background task
-        new Thread("Background") {
-            public void run() {
-                // Synchronize all background threads to this lock so actions run
-                // sequentially as they were initiated from the main interface thread
-                synchronized(runnable.lock()) {
-                    log.info("Acquired lock for background runnable:" + runnable);
-                    // An autorelease pool is used to manage Foundation's autorelease
-                    // mechanism for Objective-C objects. If you start off a thread
-                    // that calls Cocoa, there won't be a top-level pool.
-                    final int pool = NSAutoreleasePool.push();
-                    try {
-                        if(runnable.prepare()) {
-                            // Execute the action of the runnable
-                            runnable.run();
-                        }
-                    }
-                    finally {
-                        // Increase the run counter
-                        runnable.finish();
-                        // Invoke the cleanup on the main thread to let the action
-                        // synchronize the user interface
-                        CDMainApplication.invoke(new WindowMainAction(CDWindowController.this) {
-                            public void run() {
-                                runnable.cleanup();
-                            }
-                        });
-
-                        // Indicates that you are finished using the
-                        // NSAutoreleasePool identified by pool.
-                        NSAutoreleasePool.pop(pool);
-
-                        log.info("Releasing lock for background runnable:" + runnable);
-                    }
-                }
-            }
-        }.start();
-        log.info("Started background runnable:" + runnable);
+    @Override
+    protected void invalidate() {
+        listeners.clear();
+        if(window != null) {
+            window.setDelegate(null);
+        }
+        super.invalidate();
     }
 
     /**
      * The window this controller is owner of
      */
-    protected NSWindow window; // IBOutlet
+    @Outlet
+    protected NSWindow window;
 
     private Set<CDWindowListener> listeners
             = Collections.synchronizedSet(new HashSet<CDWindowListener>());
@@ -124,11 +85,11 @@ public abstract class CDWindowController extends CDBundleController {
 
     public void setWindow(NSWindow window) {
         this.window = window;
-        NSNotificationCenter.defaultCenter().addObserver(this,
-                new NSSelector("windowWillClose", new Class[]{NSNotification.class}),
+        this.window.setReleasedWhenClosed(!this.isSingleton());
+        NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                Foundation.selector("windowWillClose:"),
                 NSWindow.WindowWillCloseNotification,
                 this.window);
-        this.window.setReleasedWhenClosed(true);
     }
 
     public NSWindow window() {
@@ -136,7 +97,39 @@ public abstract class CDWindowController extends CDBundleController {
     }
 
     /**
-     * @see com.apple.cocoa.application.NSWindow.Delegate
+     * A singleton window is not released when closed and the controller is not invalidated
+     *
+     * @return
+     * @see #invalidate()
+     * @see ch.cyberduck.ui.cocoa.application.NSWindow#setReleasedWhenClosed(boolean)
+     */
+    public boolean isSingleton() {
+        return false;
+    }
+
+    /**
+     * @return True if the controller window is on screen.
+     */
+    public boolean isVisible() {
+        return this.window().isVisible();
+    }
+
+    /**
+     * @param notification
+     */
+    public void windowDidBecomeKey(NSNotification notification) {
+        ;
+    }
+
+    /**
+     * @param notification
+     */
+    public void windowDidResignKey(NSNotification notification) {
+        ;
+    }
+
+    /**
+     * @see ch.cyberduck.ui.cocoa.application.NSWindow.Delegate
      */
     public boolean windowShouldClose(NSWindow sender) {
         return true;
@@ -149,36 +142,25 @@ public abstract class CDWindowController extends CDBundleController {
      */
     public void windowWillClose(NSNotification notification) {
         log.debug("windowWillClose:" + notification);
-        for(CDWindowListener listener : listeners) {
+        for(CDWindowListener listener : listeners.toArray(new CDWindowListener[listeners.size()])) {
             listener.windowWillClose();
         }
-        //If the window is closed it is assumed the controller object is no longer used
-        this.invalidate();
-    }
-
-    protected void invalidate() {
-        this.window = null;
-        this.listeners.clear();
-        super.invalidate();
-    }
-
-    /**
-     * @return False if the window has been released
-     */
-    public boolean isShown() {
-        return this.window != null;
+        if(!this.isSingleton()) {
+            //If the window is closed it is assumed the controller object is no longer used
+            this.invalidate();
+        }
     }
 
     /**
      * Position this controller's window relative to other open windows
      */
-    public void cascade() {
+    protected void cascade() {
         NSArray windows = NSApplication.sharedApplication().windows();
-        int count = windows.count();
+        int count = windows.count().intValue();
         if(count != 0) {
-            NSWindow window = (NSWindow) windows.objectAtIndex(count - 1);
-            NSPoint origin = window.frame().origin();
-            origin = new NSPoint(origin.x(), origin.y() + window.frame().size().height());
+            NSWindow window = Rococoa.cast(windows.objectAtIndex(new NSUInteger(count - 1)), NSWindow.class);
+            NSPoint origin = window.frame().origin;
+            origin = new NSPoint(origin.x.doubleValue(), origin.y.doubleValue() + window.frame().size.height.doubleValue());
             this.window.setFrameTopLeftPoint(this.window.cascadeTopLeftFromPoint(origin));
         }
     }
@@ -191,7 +173,16 @@ public abstract class CDWindowController extends CDBundleController {
         if(open) {
             toggle.performClick(null);
         }
-        toggle.setState(open ? NSCell.OnState : NSCell.OffState);
+        toggle.setState(open ? NSCell.NSOnState : NSCell.NSOffState);
+    }
+
+    @Override
+    public void invoke(final MainAction runnable, final boolean wait) {
+        super.invoke(new WindowMainAction(this) {
+            public void run() {
+                runnable.run();
+            }
+        }, wait);
     }
 
     /**
@@ -202,6 +193,32 @@ public abstract class CDWindowController extends CDBundleController {
             return false;
         }
         return this.window.attachedSheet() != null;
+    }
+
+    /**
+     * @param alert
+     */
+    protected void alert(final NSAlert alert) {
+        this.alert(alert, new CDSheetCallback() {
+            public void callback(final int returncode) {
+                ;
+            }
+        });
+    }
+
+    /**
+     * Display alert as sheet to the window of this controller
+     *
+     * @param alert
+     * @param callback
+     */
+    protected void alert(final NSAlert alert, final CDSheetCallback callback) {
+        CDSheetController c = new CDAlertController(this, alert) {
+            public void callback(final int returncode) {
+                callback.callback(returncode);
+            }
+        };
+        c.beginSheet();
     }
 
     /**
@@ -234,7 +251,6 @@ public abstract class CDWindowController extends CDBundleController {
         c.beginSheet();
     }
 
-
     protected void updateField(final NSTextView f, final String value) {
         f.setString(StringUtils.isNotBlank(value) ? value : "");
     }
@@ -243,14 +259,10 @@ public abstract class CDWindowController extends CDBundleController {
         f.setStringValue(StringUtils.isNotBlank(value) ? value : "");
     }
 
+    @Action
     public void helpButtonClicked(final NSButton sender) {
-        try {
-            NSWorkspace.sharedWorkspace().openURL(
-                    new java.net.URL(Preferences.instance().getProperty("website.help"))
-            );
-        }
-        catch(java.net.MalformedURLException e) {
-            log.error(e.getMessage());
-        }
+        NSWorkspace.sharedWorkspace().openURL(
+                NSURL.URLWithString(Preferences.instance().getProperty("website.help"))
+        );
     }
 }

@@ -18,12 +18,12 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSPathUtilities;
-
 import ch.cyberduck.core.*;
+import ch.cyberduck.core.i18n.Locale;
+import ch.cyberduck.ui.cocoa.application.NSImageView;
 import ch.cyberduck.ui.cocoa.odb.Editor;
 import ch.cyberduck.ui.cocoa.odb.EditorFactory;
+import ch.cyberduck.ui.cocoa.threading.BrowserBackgroundAction;
 
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang.StringUtils;
@@ -40,6 +40,13 @@ public class CDCreateFileController extends CDFileController {
         super(parent);
     }
 
+    @Override
+    public void setIconView(NSImageView iconView) {
+        iconView.setImage(CDIconCache.documentIcon(null, 128));
+        super.setIconView(iconView);
+    }
+
+    @Override
     protected String getBundleName() {
         return "File";
     }
@@ -48,26 +55,26 @@ public class CDCreateFileController extends CDFileController {
         if(returncode == DEFAULT_OPTION) {
             this.createFile(this.getWorkdir(), filenameField.stringValue(), false);
         }
-        if(returncode == ALTERNATE_OPTION) {
+        if(returncode == OTHER_OPTION) {
             this.createFile(this.getWorkdir(), filenameField.stringValue(), true);
         }
     }
 
     protected void createFile(final Path workdir, final String filename, final boolean edit) {
-        final CDBrowserController c = (CDBrowserController)parent;
+        final CDBrowserController c = (CDBrowserController) parent;
         c.background(new BrowserBackgroundAction(c) {
             final Path file = PathFactory.createPath(workdir.getSession(), workdir.getAbsolute(),
-                    new Local(NSPathUtilities.temporaryDirectory(), filename));
+                    LocalFactory.createLocal(Preferences.instance().getProperty("tmp.dir"), filename));
 
             public void run() {
                 int no = 0;
                 while(file.getLocal().exists()) {
                     no++;
-                    String proposal = FilenameUtils.getBaseName(filename)+ "-" + no;
+                    String proposal = FilenameUtils.getBaseName(filename) + "-" + no;
                     if(StringUtils.isNotBlank(FilenameUtils.getExtension(filename))) {
                         proposal += "." + FilenameUtils.getExtension(filename);
                     }
-                    file.setLocal(new Local(NSPathUtilities.temporaryDirectory(), proposal));
+                    file.setLocal(LocalFactory.createLocal(Preferences.instance().getProperty("tmp.dir"), proposal));
                 }
                 file.getLocal().touch();
                 TransferOptions options = new TransferOptions();
@@ -79,23 +86,26 @@ public class CDCreateFileController extends CDFileController {
                             return TransferAction.ACTION_OVERWRITE;
                         }
                     }, options);
+                    file.getParent().invalidate();
                 }
                 finally {
                     file.getLocal().delete(false);
                 }
                 if(file.exists()) {
                     if(edit) {
-                        Editor editor = EditorFactory.createEditor(c, file.getLocal(), file);
+                        Editor editor = EditorFactory.createEditor(c, file);
                         editor.open();
                     }
                 }
             }
 
+            @Override
             public String getActivity() {
-                return MessageFormat.format(NSBundle.localizedString("Uploading {0}", "Status", ""),
+                return MessageFormat.format(Locale.localizedString("Uploading {0}", "Status"),
                         file.getName());
             }
 
+            @Override
             public void cleanup() {
                 if(filename.charAt(0) == '.') {
                     c.setShowHiddenFiles(true);

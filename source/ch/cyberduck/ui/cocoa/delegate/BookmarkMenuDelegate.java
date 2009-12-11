@@ -18,76 +18,67 @@ package ch.cyberduck.ui.cocoa.delegate;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSApplication;
-import com.apple.cocoa.application.NSMenu;
-import com.apple.cocoa.application.NSMenuItem;
-import com.apple.cocoa.foundation.NSSelector;
-
 import ch.cyberduck.core.Host;
 import ch.cyberduck.core.HostCollection;
 import ch.cyberduck.ui.cocoa.CDBrowserController;
 import ch.cyberduck.ui.cocoa.CDIconCache;
 import ch.cyberduck.ui.cocoa.CDMainController;
+import ch.cyberduck.ui.cocoa.application.NSMenu;
+import ch.cyberduck.ui.cocoa.application.NSMenuItem;
 
 import org.apache.log4j.Logger;
+import org.rococoa.Foundation;
+import org.rococoa.cocoa.foundation.NSInteger;
 
 /**
  * @version $Id$
  */
-public class BookmarkMenuDelegate extends MenuDelegate {
+public class BookmarkMenuDelegate extends CollectionMenuDelegate<Host> {
     private static Logger log = Logger.getLogger(BookmarkMenuDelegate.class);
 
-    /**
-     * @see com.apple.cocoa.application.NSMenu.Delegate
-     */
-    public int numberOfItemsInMenu(NSMenu menu) {
-        return HostCollection.defaultCollection().size() + 10;
+    public BookmarkMenuDelegate() {
+        super(HostCollection.defaultCollection());
+    }
+
+    public NSInteger numberOfItemsInMenu(NSMenu menu) {
+        return new NSInteger(HostCollection.defaultCollection().size() + 9);
         //index 0-2 are static menu items, 3 is sepeartor, 4 is iDisk with submenu, 5 is History with submenu,
         // 6 is Bonjour with submenu, 7 is sepearator
     }
 
-    /**
-     * Called to let you update a menu item before it is displayed. If your
-     * numberOfItemsInMenu delegate method returns a positive value,
-     * then your menuUpdateItemAtIndex method is called for each item in the menu.
-     * You can then update the menu title, image, and so forth for the menu item.
-     * Return true to continue the process. If you return false, your menuUpdateItemAtIndex
-     * is not called again. In that case, it is your responsibility to trim any extra items from the menu.
-     *
-     * @see com.apple.cocoa.application.NSMenu.Delegate
-     */
-    public boolean menuUpdateItemAtIndex(NSMenu menu, NSMenuItem item, int index, boolean shouldCancel) {
-        if(index >= this.numberOfItemsInMenu(menu)) {
-            log.warn("Invalid index in menuUpdateItemAtIndex:" + index);
+    private static final int BOOKMARKS_INDEX = 6;
+
+    @Override
+    public boolean menuUpdateItemAtIndex(NSMenu menu, NSMenuItem item, NSInteger index, boolean shouldCancel) {
+        if(shouldCancel) {
             return false;
         }
-        if(index == 6) {
-            item.setEnabled(true);
-            item.setImage(CDIconCache.instance().iconForName("me-icon.png", 16));
+        if(super.shouldSkipValidation(menu, index.intValue())) {
+            return false;
         }
-        if(index == 7) {
+        if(index.intValue() == BOOKMARKS_INDEX) {
             item.setEnabled(true);
-            item.setImage(CDIconCache.instance().iconForName("history", 16));
+            item.setImage(CDIconCache.iconNamed("history", 16));
         }
-        if(index == 8) {
+        if(index.intValue() == BOOKMARKS_INDEX + 1) {
             item.setEnabled(true);
-            item.setImage(CDIconCache.instance().iconForName("rendezvous", 16));
+            item.setImage(CDIconCache.iconNamed("rendezvous", 16));
         }
-        if(index > 9) {
-            Host h = HostCollection.defaultCollection().get(index - 10);
+        if(index.intValue() > BOOKMARKS_INDEX + 2) {
+            Host h = HostCollection.defaultCollection().get(index.intValue() - (BOOKMARKS_INDEX + 3));
             item.setTitle(h.getNickname());
-            item.setTarget(this);
-            item.setImage(CDIconCache.instance().iconForName(h.getProtocol().icon(), 16));
-            item.setAction(new NSSelector("bookmarkMenuItemClicked", new Class[]{Object.class}));
-            item.setRepresentedObject(h);
+            item.setTarget(this.id());
+            item.setImage(CDIconCache.iconNamed(h.getProtocol().icon(), 16));
+            item.setAction(Foundation.selector("bookmarkMenuItemClicked:"));
+            item.setRepresentedObject(h.getNickname());
         }
         return true;
     }
 
     public void bookmarkMenuItemClicked(final NSMenuItem sender) {
         log.debug("bookmarkMenuItemClicked:" + sender);
-        CDBrowserController controller
-                = ((CDMainController) (NSApplication.sharedApplication().delegate())).newDocument();
-        controller.mount((Host) sender.representedObject());
+        CDBrowserController controller = CDMainController.newDocument();
+        final int row = HostCollection.defaultCollection().indexOf(sender.representedObject());
+        controller.mount(HostCollection.defaultCollection().get(row));
     }
 }

@@ -18,44 +18,46 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSDraggingInfo;
-import com.apple.cocoa.application.NSPasteboard;
-import com.apple.cocoa.application.NSTableColumn;
-import com.apple.cocoa.application.NSTableView;
-import com.apple.cocoa.foundation.NSArray;
-import com.apple.cocoa.foundation.NSMutableArray;
-
+import ch.cyberduck.core.AttributedList;
 import ch.cyberduck.core.Path;
+import ch.cyberduck.ui.cocoa.application.NSDraggingInfo;
+import ch.cyberduck.ui.cocoa.application.NSPasteboard;
+import ch.cyberduck.ui.cocoa.application.NSTableColumn;
+import ch.cyberduck.ui.cocoa.application.NSTableView;
+import ch.cyberduck.ui.cocoa.foundation.*;
+
+import org.rococoa.cocoa.foundation.NSUInteger;
+import org.rococoa.cocoa.foundation.NSInteger;
 
 import java.util.List;
 
 /**
  * @version $Id$
  */
-public class CDBrowserListViewModel extends CDBrowserTableDataSource implements CDListDataSource {
+public class CDBrowserListViewModel extends CDBrowserTableDataSource implements NSTableView.DataSource {
 
     public CDBrowserListViewModel(CDBrowserController controller) {
         super(controller);
     }
 
-    public int numberOfRowsInTableView(NSTableView view) {
-        if (controller.isMounted()) {
-            return this.childs(this.controller.workdir()).size();
+    public NSInteger numberOfRowsInTableView(NSTableView view) {
+        if(controller.isMounted()) {
+            return new NSInteger(this.childs(this.controller.workdir()).size());
         }
-        return 0;
+        return new NSInteger(0);
     }
 
-    public void tableViewSetObjectValueForLocation(NSTableView view, Object value, NSTableColumn tableColumn, int row) {
-        if (controller.isMounted()) {
-            super.setObjectValueForItem(this.childs(this.controller.workdir()).get(row), value, (String) tableColumn.identifier());
+    public void tableView_setObjectValue_forTableColumn_row(NSTableView view, NSObject value, NSTableColumn tableColumn, NSInteger row) {
+        if(controller.isMounted()) {
+            super.setObjectValueForItem(this.childs(this.controller.workdir()).get(row.intValue()), value, tableColumn.identifier());
         }
     }
 
-    public Object tableViewObjectValueForLocation(NSTableView view, NSTableColumn tableColumn, int row) {
-        if (controller.isMounted()) {
-            List<Path> childs = this.childs(this.controller.workdir());
-            if (row < childs.size()) {
-                return super.objectValueForItem(childs.get(row), (String) tableColumn.identifier());
+    public NSObject tableView_objectValueForTableColumn_row(NSTableView view, NSTableColumn tableColumn, NSInteger row) {
+        if(controller.isMounted()) {
+            final List<Path> childs = this.childs(this.controller.workdir());
+            if(row.intValue() < childs.size()) {
+                return super.objectValueForItem(childs.get(row.intValue()), tableColumn.identifier());
             }
         }
         return null;
@@ -65,32 +67,32 @@ public class CDBrowserListViewModel extends CDBrowserTableDataSource implements 
     // Drop methods
     // ----------------------------------------------------------
 
-    public int tableViewValidateDrop(NSTableView view, NSDraggingInfo info, int row, int operation) {
-        if (controller.isMounted()) {
+    public NSUInteger tableView_validateDrop_proposedRow_proposedDropOperation(NSTableView view, NSDraggingInfo draggingInfo, NSInteger row, NSUInteger operation) {
+        if(controller.isMounted()) {
             Path destination = controller.workdir();
-            final int draggingColumn = view.columnAtPoint(info.draggingLocation());
+            final int draggingColumn = view.columnAtPoint(draggingInfo.draggingLocation()).intValue();
             if(0 == draggingColumn || 1 == draggingColumn) {
-                if (row != -1 && row < view.numberOfRows()) {
-                    Path p = this.childs(this.controller.workdir()).get(row);
+                if(row.intValue() != -1 && row.intValue() < view.numberOfRows().intValue()) {
+                    Path p = this.childs(this.controller.workdir()).get(row.intValue());
                     if(p.attributes.isDirectory()) {
                         destination = p;
                     }
                 }
             }
-            return super.validateDrop(view, destination, row, info);
+            return super.validateDrop(view, destination, row, draggingInfo);
         }
-        return super.validateDrop(view, null, row, info);
+        return super.validateDrop(view, null, row, draggingInfo);
     }
 
-    public boolean tableViewAcceptDrop(NSTableView view, NSDraggingInfo info, int row, int operation) {
-        if (controller.isMounted()) {
+    public boolean tableView_acceptDrop_row_dropOperation(NSTableView view, NSDraggingInfo draggingInfo, NSInteger row, NSUInteger operation) {
+        if(controller.isMounted()) {
             Path destination = controller.workdir();
-            if (row != -1 && row < view.numberOfRows()) {
-                destination = this.childs(this.controller.workdir()).get(row);
+            if(row.intValue() != -1 && row.intValue() < view.numberOfRows().intValue()) {
+                destination = this.childs(this.controller.workdir()).get(row.intValue());
             }
-            return super.acceptDrop(view, destination, info);
+            return super.acceptDrop(view, destination, draggingInfo);
         }
-        return super.acceptDrop(view, null, info);
+        return super.acceptDrop(view, null, draggingInfo);
     }
 
     // ----------------------------------------------------------
@@ -102,18 +104,47 @@ public class CDBrowserListViewModel extends CDBrowserTableDataSource implements 
      * The drag image and other drag-related information will be set up and provided by the table view once this call
      * returns with true.
      *
-     * @param rows is the list of row numbers that will be participating in the drag.
+     * @param rowIndexes is the list of row numbers that will be participating in the drag.
      * @return To refuse the drag, return false. To start a drag, return true and place the drag data onto pboard (data, owner, and so on).
      */
-    public boolean tableViewWriteRowsToPasteboard(NSTableView view, NSArray rows, NSPasteboard pboard) {
-        if (controller.isMounted()) {
-            NSMutableArray items = new NSMutableArray();
-            List childs = this.childs(this.controller.workdir());
-            for (int i = 0; i < rows.count(); i++) {
-                items.addObject(childs.get(((Number) rows.objectAtIndex(i)).intValue()));
+    public boolean tableView_writeRowsWithIndexes_toPasteboard(NSTableView view, NSIndexSet rowIndexes, NSPasteboard pboard) {
+        if(controller.isMounted()) {
+            NSMutableArray items = NSMutableArray.array();
+            final AttributedList<Path> childs = this.childs(this.controller.workdir());
+            for(NSUInteger index = rowIndexes.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = rowIndexes.indexGreaterThanIndex(index)) {
+                items.addObject(NSString.stringWithString(childs.get(index.intValue()).getAbsolute()));
             }
             return super.writeItemsToPasteBoard(view, items, pboard);
         }
         return false;
     }
+
+    public NSArray tableView_namesOfPromisedFilesDroppedAtDestination_forDraggedRowsWithIndexes(NSTableView view, final NSURL dropDestination, NSIndexSet rowIndexes) {
+        return this.namesOfPromisedFilesDroppedAtDestination(dropDestination);
+    }
+
+//    public NSArray tableView_namesOfPromisedFilesDroppedAtDestination_forDraggedRowsWithIndexes(NSTableView view, final NSURL dropDestination, NSIndexSet rowIndexes) {
+//        final NSMutableArray promisedDragNames = NSMutableArray.arrayWithCapacity(rowIndexes.count().intValue());
+//        final List<Path> roots = new Collection<Path>();
+//        final AttributedList<Path> childs = this.childs(this.controller.workdir());
+//        for(NSUInteger index = rowIndexes.firstIndex(); index.intValue() != NSIndexSet.NSNotFound; index = rowIndexes.indexGreaterThanIndex(index)) {
+//            Path promisedDragPath = childs.get(index.intValue());
+//            promisedDragPath.setLocal(LocalFactory.createLocalLocal(dropDestination.path(), promisedDragPath.getName()));
+//            if(rowIndexes.count().intValue() == 1) {
+//                if(promisedDragPath.attributes.isFile()) {
+//                    promisedDragPath.getLocal().touch();
+//                }
+//                if(promisedDragPath.attributes.isDirectory()) {
+//                    promisedDragPath.getLocal().mkdir();
+//                }
+//            }
+//            promisedDragNames.addObject(NSString.stringWithString(promisedDragPath.getLocal().getName()));
+//            roots.add(promisedDragPath);
+//        }
+//        final Transfer q = new DownloadTransfer(roots);
+//        if(q.numberOfRoots() > 0) {
+//            controller.transfer(q);
+//        }
+//        return promisedDragNames;
+//    }
 }

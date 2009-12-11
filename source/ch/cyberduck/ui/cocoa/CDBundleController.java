@@ -18,50 +18,68 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSApplication;
-import com.apple.cocoa.application.NSFont;
-import com.apple.cocoa.application.NSView;
-import com.apple.cocoa.foundation.NSAttributedString;
-import com.apple.cocoa.foundation.NSDictionary;
+import ch.cyberduck.ui.cocoa.application.NSFont;
+import ch.cyberduck.ui.cocoa.application.NSView;
+import ch.cyberduck.ui.cocoa.foundation.NSArray;
+import ch.cyberduck.ui.cocoa.foundation.NSAttributedString;
+import ch.cyberduck.ui.cocoa.foundation.NSBundle;
+import ch.cyberduck.ui.cocoa.foundation.NSDictionary;
 
 import org.apache.log4j.Logger;
 
 /**
- * @version $Id:$
+ * @version $Id$
  */
-public abstract class CDBundleController extends CDController {
+public abstract class CDBundleController extends ProxyController {
     private static Logger log = Logger.getLogger(CDBundleController.class);
 
-    protected static final NSDictionary TRUNCATE_MIDDLE_ATTRIBUTES = new NSDictionary(
-            new Object[]{
-                    CDTableCellAttributes.PARAGRAPH_STYLE_LEFT_ALIGNMENT_TRUNCATE_MIDDLE},
-            new Object[]{
-                    NSAttributedString.ParagraphStyleAttributeName});
+    protected static final NSDictionary TRUNCATE_MIDDLE_ATTRIBUTES = NSDictionary.dictionaryWithObjectsForKeys(
+            NSArray.arrayWithObject(CDTableCellAttributes.PARAGRAPH_STYLE_LEFT_ALIGNMENT_TRUNCATE_MIDDLE),
+            NSArray.arrayWithObject(NSAttributedString.ParagraphStyleAttributeName)
+    );
 
-    protected static final NSDictionary FIXED_WITH_FONT_ATTRIBUTES = new NSDictionary(
-            new Object[]{NSFont.userFixedPitchFontOfSize(NSFont.smallSystemFontSize())},
-            new Object[]{NSAttributedString.FontAttributeName}
+    protected static final NSDictionary FIXED_WITH_FONT_ATTRIBUTES = NSDictionary.dictionaryWithObjectsForKeys(
+            NSArray.arrayWithObject(NSFont.userFixedPitchFontOfSize(9.0f)),
+            NSArray.arrayWithObject(NSAttributedString.FontAttributeName)
     );
 
     protected void loadBundle() {
         final String bundleName = this.getBundleName();
         if(null == bundleName) {
             log.debug("No bundle to load for " + this.toString());
+            return;
         }
-        else {
-            this.loadBundle(bundleName);
-        }
+        this.loadBundle(bundleName);
     }
 
     protected void loadBundle(final String bundleName) {
-        synchronized(NSApplication.sharedApplication()) {
-            if(!NSApplication.loadNibNamed(bundleName, this)) {
-                log.fatal("Couldn't load " + bundleName + ".nib");
-            }
+        if(awaked) {
+            log.warn("Bundle " + bundleName + " already loaded");
+            return;
+        }
+        log.info("Loading bundle " + bundleName);
+        if(!NSBundle.loadNibNamed(bundleName, this.id())) {
+            log.fatal("Couldn't load " + bundleName + ".nib");
+            return;
+        }
+        if(!awaked) {
+            this.awakeFromNib();
         }
     }
 
-    protected abstract void awakeFromNib();
+    /**
+     * After loading the NIB, awakeFromNib from NSNibLoading protocol was called.
+     * Not the case on 10.6 for unknown reasons.
+     */
+    private boolean awaked;
+
+    /**
+     * Called by the runtime after the NIB file has been loaded sucessfully
+     */
+    public void awakeFromNib() {
+        log.debug("awakeFromNib");
+        awaked = true;
+    }
 
     /**
      * @return The top level view object or null if unknown

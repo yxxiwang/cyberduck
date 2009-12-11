@@ -18,10 +18,9 @@ package ch.cyberduck.core.sftp;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-
 import ch.cyberduck.core.*;
 import ch.cyberduck.core.Session;
+import ch.cyberduck.core.i18n.Locale;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
@@ -45,6 +44,7 @@ public class SFTPSession extends Session {
     }
 
     private static class Factory extends SessionFactory {
+        @Override
         protected Session create(Host h) {
             return new SFTPSession(h);
         }
@@ -56,6 +56,7 @@ public class SFTPSession extends Session {
         super(h);
     }
 
+    @Override
     public boolean isSecure() {
         if(super.isSecure()) {
             return SSH.isAuthenticationComplete();
@@ -63,6 +64,7 @@ public class SFTPSession extends Session {
         return false;
     }
 
+    @Override
     public String getIdentification() {
         StringBuffer info = new StringBuffer(super.getIdentification() + "\n");
         if(SFTP != null) {
@@ -106,10 +108,10 @@ public class SFTPSession extends Session {
             if(!SSH.isAuthenticationComplete()) {
                 throw new LoginCanceledException();
             }
-            this.message(NSBundle.localizedString("Starting SFTP subsystem", "Status", ""));
+            this.message(Locale.localizedString("Starting SFTP subsystem", "Status"));
             try {
                 SFTP = new SFTPv3Client(SSH);
-                this.message(NSBundle.localizedString("SFTP subsystem ready", "Status", ""));
+                this.message(Locale.localizedString("SFTP subsystem ready", "Status"));
                 SFTP.setCharset(this.getEncoding());
             }
             catch(IOException e) {
@@ -131,20 +133,19 @@ public class SFTPSession extends Session {
         if(!SSH.isAuthenticationComplete()) {
             throw new LoginCanceledException();
         }
-//        this.message(NSBundle.localizedString("Starting SCP subsystem", "Status", ""));
         final SCPClient client = new SCPClient(SSH);
-//        this.message(NSBundle.localizedString("SCP subsystem ready", "Status", ""));
         client.setCharset(this.getEncoding());
         return client;
     }
 
+    @Override
     protected void connect() throws IOException, ConnectionCanceledException, LoginCanceledException {
         if(this.isConnected()) {
             return;
         }
         this.fireConnectionWillOpenEvent();
 
-        this.message(MessageFormat.format(NSBundle.localizedString("Opening {0} connection to {1}", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("Opening {0} connection to {1}", "Status"),
                 host.getProtocol().getName(), host.getHostname()));
 
         SSH = new Connection(this.host.getHostname(true), this.host.getPort());
@@ -154,7 +155,7 @@ public class SFTPSession extends Session {
         if(!this.isConnected()) {
             throw new ConnectionCanceledException();
         }
-        this.message(MessageFormat.format(NSBundle.localizedString("{0} connection opened", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("{0} connection opened", "Status"),
                 host.getProtocol().getName()));
         this.login();
         if(!SSH.isAuthenticationComplete()) {
@@ -163,28 +164,29 @@ public class SFTPSession extends Session {
         this.fireConnectionDidOpenEvent();
     }
 
+    @Override
     protected void login(final Credentials credentials) throws IOException {
         if(host.getCredentials().isPublicKeyAuthentication()) {
             if(this.loginUsingPublicKeyAuthentication(credentials)) {
-                this.message(NSBundle.localizedString("Login successful", "Credentials", ""));
+                this.message(Locale.localizedString("Login successful", "Credentials"));
                 return;
             }
         }
         else if(this.loginUsingPasswordAuthentication(credentials)
                 || this.loginUsingKBIAuthentication(credentials)) {
-            this.message(NSBundle.localizedString("Login successful", "Credentials", ""));
+            this.message(Locale.localizedString("Login successful", "Credentials"));
             return;
         }
-        this.message(NSBundle.localizedString("Login failed", "Credentials", ""));
+        this.message(Locale.localizedString("Login failed", "Credentials"));
         this.login.fail(host,
-                NSBundle.localizedString("Login with username and password", "Credentials", ""));
+                Locale.localizedString("Login with username and password", "Credentials"));
         this.login();
     }
 
     private boolean loginUsingPublicKeyAuthentication(final Credentials credentials) throws IOException {
         log.debug("loginUsingPublicKeyAuthentication:" + credentials);
         if(SSH.isAuthMethodAvailable(host.getCredentials().getUsername(), "publickey")) {
-            final Credentials.Identity identity = host.getCredentials().getIdentity();
+            final Local identity = host.getCredentials().getIdentity();
             if(identity.exists()) {
                 // If the private key is passphrase protected then ask for the passphrase
                 char[] buff = new char[256];
@@ -200,15 +202,15 @@ public class SFTPSession extends Session {
                 fr.close();
                 String passphrase = null;
                 if(PEMDecoder.isPEMEncrypted(cw.toCharArray())) {
-                    passphrase = Keychain.instance().getPasswordFromKeychain("SSHKeychain", identity.toURL());
+                    passphrase = KeychainFactory.instance().getPassword("SSHKeychain", identity.toURL());
                     if(StringUtils.isEmpty(passphrase)) {
                         login.prompt(host,
-                                NSBundle.localizedString("Private key password protected", "Credentials", ""),
-                                NSBundle.localizedString("Enter the passphrase for the private key file", "Credentials", "")
+                                Locale.localizedString("Private key password protected", "Credentials"),
+                                Locale.localizedString("Enter the passphrase for the private key file", "Credentials")
                                         + " (" + identity + ")");
                         passphrase = credentials.getPassword();
                         if(credentials.usesKeychain() && PEMDecoder.isPEMEncrypted(cw.toCharArray())) {
-                            Keychain.instance().addPasswordToKeychain("SSHKeychain", identity.toURL(),
+                            KeychainFactory.instance().addPassword("SSHKeychain", identity.toURL(),
                                     passphrase);
                         }
                     }
@@ -243,7 +245,7 @@ public class SFTPSession extends Session {
      * The logic that one has to implement if "keyboard-interactive" autentication shall be
      * supported.
      */
-    private class InteractiveLogic implements InteractiveCallback {
+    private static class InteractiveLogic implements InteractiveCallback {
         int promptCount = 0;
         Credentials credentials;
 
@@ -275,6 +277,7 @@ public class SFTPSession extends Session {
         }
     }
 
+    @Override
     public void close() {
         try {
             this.fireConnectionWillCloseEvent();
@@ -292,6 +295,7 @@ public class SFTPSession extends Session {
         }
     }
 
+    @Override
     public void interrupt() {
         try {
             super.interrupt();
@@ -308,6 +312,7 @@ public class SFTPSession extends Session {
         }
     }
 
+    @Override
     public void check() throws IOException {
         this.check(true);
     }
@@ -333,7 +338,11 @@ public class SFTPSession extends Session {
         }
     }
 
+    @Override
     public Path workdir() throws IOException {
+        if(null == SFTP) {
+            throw new ConnectionCanceledException();
+        }
         if(!SFTP.isConnected()) {
             throw new ConnectionCanceledException();
         }
@@ -344,25 +353,29 @@ public class SFTPSession extends Session {
         return workdir;
     }
 
+    @Override
     protected void noop() throws IOException {
         if(this.isConnected()) {
             SSH.sendIgnorePacket();
         }
-
     }
 
+    @Override
     public boolean isSendCommandSupported() {
         return true;
     }
 
+    @Override
     public boolean isArchiveSupported() {
         return true;
     }
 
+    @Override
     public boolean isUnarchiveSupported() {
         return true;
     }
 
+    @Override
     public void sendCommand(String command) throws IOException {
         final ch.ethz.ssh2.Session sess = SSH.openSession();
         try {
@@ -395,21 +408,8 @@ public class SFTPSession extends Session {
         }
     }
 
+    @Override
     public boolean isConnected() {
-        if(null == SSH) {
-            return false;
-        }
-//        try {
-//            SSH.getConnectionInfo();
-//        }
-//        catch(IllegalStateException e) {
-//            log.debug("isConnected:" + e.getMessage());
-//            return false;
-//        }
-//        catch(IOException e) {
-//            log.debug("isConnected:" + e.getMessage());
-//            return false;
-//        }
-        return true;
+        return null != SSH;
     }
 }

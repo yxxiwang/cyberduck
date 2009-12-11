@@ -18,28 +18,32 @@ package ch.cyberduck.core.cf;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-
 import ch.cyberduck.core.*;
+import ch.cyberduck.core.cloud.CloudSession;
+import ch.cyberduck.core.cloud.Distribution;
 import ch.cyberduck.core.http.HTTPSession;
 import ch.cyberduck.core.http.StickyHostConfiguration;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.core.ssl.*;
 
 import org.apache.commons.httpclient.HostConfiguration;
+import org.apache.commons.httpclient.protocol.ProtocolSocketFactory;
 import org.apache.log4j.Logger;
 
 import java.io.IOException;
 import java.net.URI;
 import java.text.MessageFormat;
 
-import com.mosso.client.cloudfiles.FilesClient;
+import com.rackspacecloud.client.cloudfiles.FilesCDNContainer;
+import com.rackspacecloud.client.cloudfiles.FilesClient;
+import com.rackspacecloud.client.cloudfiles.FilesException;
 
 /**
- * Mosso Cloud Files Implementation
+ * Rackspace Cloud Files Implementation
  *
  * @version $Id$
  */
-public class CFSession extends HTTPSession implements SSLSession {
+public class CFSession extends HTTPSession implements SSLSession, CloudSession {
     private static Logger log = Logger.getLogger(CFSession.class);
 
     static {
@@ -47,6 +51,7 @@ public class CFSession extends HTTPSession implements SSLSession {
     }
 
     private static class Factory extends SessionFactory {
+        @Override
         protected Session create(Host h) {
             return new CFSession(h);
         }
@@ -74,7 +79,7 @@ public class CFSession extends HTTPSession implements SSLSession {
      *
      * @param trustManager
      */
-    public void setTrustManager(AbstractX509TrustManager trustManager) {
+    private void setTrustManager(AbstractX509TrustManager trustManager) {
         this.trustManager = trustManager;
     }
 
@@ -84,46 +89,53 @@ public class CFSession extends HTTPSession implements SSLSession {
         super(h);
     }
 
+    @Override
     protected void connect() throws IOException, ConnectionCanceledException, LoginCanceledException {
         if(this.isConnected()) {
             return;
         }
         this.CF = new FilesClient();
         this.fireConnectionWillOpenEvent();
-        this.message(MessageFormat.format(NSBundle.localizedString("Opening {0} connection to {1}", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("Opening {0} connection to {1}", "Status"),
                 host.getProtocol().getName(), host.getHostname()));
 
         this.CF.setConnectionTimeOut(this.timeout());
-        final HostConfiguration hostConfiguration = new StickyHostConfiguration();
-        hostConfiguration.setHost(host.getHostname(), host.getPort(),
+        final HostConfiguration config = new StickyHostConfiguration();
+        config.setHost(host.getHostname(), host.getPort(),
                 new org.apache.commons.httpclient.protocol.Protocol(host.getProtocol().getScheme(),
-                        new CustomTrustSSLProtocolSocketFactory(this.getTrustManager()), host.getPort())
+                        (ProtocolSocketFactory)new CustomTrustSSLProtocolSocketFactory(this.getTrustManager()), host.getPort())
         );
-        this.CF.setHostConfiguration(hostConfiguration);
+        final Proxy proxy = ProxyFactory.instance();
+        if(proxy.isHTTPSProxyEnabled()) {
+            config.setProxy(proxy.getHTTPSProxyHost(), proxy.getHTTPSProxyPort());
+        }
+        this.CF.setHostConfiguration(config);
         this.CF.setUserAgent(this.getUserAgent());
 
         // Prompt the login credentials first
         this.login();
 
-        this.message(MessageFormat.format(NSBundle.localizedString("{0} connection opened", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("{0} connection opened", "Status"),
                 host.getProtocol().getName()));
         this.fireConnectionDidOpenEvent();
 
     }
 
+    @Override
     protected void login(Credentials credentials) throws IOException {
         this.CF.setUserName(credentials.getUsername());
         this.CF.setPassword(credentials.getPassword());
         this.getTrustManager().setHostname(URI.create(CF.getAuthenticationURL()).getHost());
         if(!this.CF.login()) {
-            this.message(NSBundle.localizedString("Login failed", "Credentials", ""));
+            this.message(Locale.localizedString("Login failed", "Credentials"));
             this.login.fail(host,
-                    NSBundle.localizedString("Login with username and password", "Credentials", ""));
+                    Locale.localizedString("Login with username and password", "Credentials"));
             this.login();
         }
         this.getTrustManager().setHostname(URI.create(CF.getStorageURL()).getHost());
     }
 
+    @Override
     public void close() {
         try {
             if(this.isConnected()) {
@@ -137,6 +149,7 @@ public class CFSession extends HTTPSession implements SSLSession {
         }
     }
 
+    @Override
     public void interrupt() {
         try {
             super.interrupt();
@@ -150,25 +163,84 @@ public class CFSession extends HTTPSession implements SSLSession {
         }
     }
 
-    public Path workdir() throws IOException {
-        if(!this.isConnected()) {
-            throw new ConnectionCanceledException();
-        }
-        if(null == workdir) {
-            workdir = PathFactory.createPath(this, Path.DELIMITER, Path.VOLUME_TYPE | Path.DIRECTORY_TYPE);
-        }
-        return workdir;
-    }
-
+    @Override
     protected void noop() {
         ;
     }
 
+    @Override
     public void sendCommand(String command) throws IOException {
         throw new UnsupportedOperationException();
     }
 
+    @Override
     public boolean isConnected() {
         return CF != null;
+    }
+
+    /**
+     * @param enabled Enable content distribution for the container
+     * @param cnames  Currently ignored
+     * @param logging
+     */
+    public void writeDistribution(String container, boolean enabled, String[] cnames, boolean logging) {
+        final AbstractX509TrustManager trust = this.getTrustManager();
+        try {
+            this.check();
+            trust.setHostname(URI.create(CF.getCdnManagementURL()).getHost());
+            if(enabled) {
+                this.message(MessageFormat.format(Locale.localizedString("Enable {0} Distribution", "Status"),
+                        Locale.localizedString("Rackspace Cloud Files", "Mosso")));
+            }
+            else {
+                this.message(MessageFormat.format(Locale.localizedString("Disable {0} Distribution", "Status"),
+                        Locale.localizedString("Rackspace Cloud Files", "Mosso")));
+            }
+            if(enabled) {
+                try {
+                    final FilesCDNContainer info = CF.getCDNContainerInfo(container);
+                }
+                catch(FilesException e) {
+                    log.warn(e.getMessage());
+                    // Not found.
+                    CF.cdnEnableContainer(container);
+                }
+            }
+            // Toggle content distribution for the container without changing the TTL expiration
+            CF.cdnUpdateContainer(container, -1, enabled, logging);
+        }
+        catch(IOException e) {
+            this.error("Cannot write file attributes", e);
+        }
+        finally {
+            trust.setHostname(URI.create(CF.getStorageURL()).getHost());
+        }
+    }
+
+    public Distribution readDistribution(String container) {
+        if(null != container) {
+            final AbstractX509TrustManager trust = this.getTrustManager();
+            try {
+                this.check();
+                trust.setHostname(URI.create(CF.getCdnManagementURL()).getHost());
+                try {
+                    final FilesCDNContainer info = CF.getCDNContainerInfo(container);
+                    return new Distribution(info.isEnabled(), info.getCdnURL(),
+                            info.isEnabled() ? Locale.localizedString("CDN Enabled", "Mosso") : Locale.localizedString("CDN Disabled", "Mosso"), info.getRetainLogs());
+                }
+                catch(FilesException e) {
+                    log.warn(e.getMessage());
+                    // Not found.
+                    return new Distribution(false, null, Locale.localizedString("CDN Disabled", "Mosso"));
+                }
+            }
+            catch(IOException e) {
+                this.error("Cannot read file attributes", e);
+            }
+            finally {
+                trust.setHostname(URI.create(CF.getStorageURL()).getHost());
+            }
+        }
+        return new Distribution(false, null, null);
     }
 }

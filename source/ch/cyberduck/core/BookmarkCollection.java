@@ -18,14 +18,26 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSImage;
-
-import ch.cyberduck.ui.cocoa.CDIconCache;
-
 /**
  * @version $Id$
  */
 public abstract class BookmarkCollection extends Collection<Host> {
+
+    private static final BookmarkCollection EMPTY = new BookmarkCollection() {
+        @Override
+        public void save() {
+            ;
+        }
+
+        @Override
+        public void load() {
+            ;
+        }
+    };
+
+    public static BookmarkCollection empty() {
+        return EMPTY;
+    }
 
     public BookmarkCollection() {
         super();
@@ -61,4 +73,8 @@ public abstract class BookmarkCollection extends Collection<Host> {
     public boolean allowsEdit() {
         return true;
     }
+
+    public abstract void save();
+
+    public abstract void load();
 }

@@ -18,12 +18,14 @@ package ch.cyberduck.ui.cocoa.threading;
  *  dkocher@cyberduck.ch
  */
 
+import ch.cyberduck.core.threading.MainAction;
+import ch.cyberduck.core.threading.DefaultMainAction;
 import ch.cyberduck.ui.cocoa.CDWindowController;
 
 /**
- * @version $Id:$
+ * @version $Id$
  */
-public abstract class WindowMainAction extends MainAction {
+public abstract class WindowMainAction extends DefaultMainAction {
 
     private CDWindowController controller;
 
@@ -31,7 +33,11 @@ public abstract class WindowMainAction extends MainAction {
         this.controller = c;
     }
 
+    /**
+     * @return True if hte window is still on screen
+     */
+    @Override
     public boolean isValid() {
-        return controller.isShown();
+        return controller.isVisible();
     }
 }

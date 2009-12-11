@@ -23,6 +23,8 @@ import ch.cyberduck.core.dav.DAVSession;
 import ch.cyberduck.core.ssl.*;
 
 import org.apache.commons.httpclient.HttpClient;
+import org.apache.commons.httpclient.UsernamePasswordCredentials;
+import org.apache.commons.httpclient.protocol.ProtocolSocketFactory;
 
 import java.io.IOException;
 
@@ -36,6 +38,7 @@ public class DAVSSession extends DAVSession implements SSLSession {
     }
 
     private static class Factory extends SessionFactory {
+        @Override
         protected Session create(Host h) {
             return new DAVSSession(h);
         }
@@ -45,14 +48,21 @@ public class DAVSSession extends DAVSession implements SSLSession {
         super(h);
     }
 
+    @Override
     protected void configure() throws IOException {
         super.configure();
         final HttpClient client = this.DAV.getSessionInstance(this.DAV.getHttpURL(), false);
         client.getHostConfiguration().setHost(host.getHostname(), host.getPort(),
                 new org.apache.commons.httpclient.protocol.Protocol("https",
-                        new CustomTrustSSLProtocolSocketFactory(this.getTrustManager()), host.getPort()));
-        if(Proxy.isHTTPSProxyEnabled()) {
-            this.DAV.setProxy(Proxy.getHTTPSProxyHost(), Proxy.getHTTPSProxyPort());
+                        (ProtocolSocketFactory)new CustomTrustSSLProtocolSocketFactory(this.getTrustManager()), host.getPort()));
+        final Proxy proxy = ProxyFactory.instance();
+        if(proxy.isHTTPSProxyEnabled()) {
+            this.DAV.setProxy(proxy.getHTTPSProxyHost(), proxy.getHTTPSProxyPort());
+            //this.DAV.setProxyCredentials(new UsernamePasswordCredentials(null, null));
+        }
+        else {
+            this.DAV.setProxy(null, -1);
+            //this.DAV.setProxyCredentials(null);
         }
     }
 
@@ -78,7 +88,7 @@ public class DAVSSession extends DAVSession implements SSLSession {
      *
      * @param trustManager
      */
-    public void setTrustManager(AbstractX509TrustManager trustManager) {
+    private void setTrustManager(AbstractX509TrustManager trustManager) {
         this.trustManager = trustManager;
     }
 }

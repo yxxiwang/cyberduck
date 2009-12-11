@@ -18,13 +18,13 @@ package ch.cyberduck.core.ftp;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-
 import ch.cyberduck.core.*;
 import ch.cyberduck.core.ftp.parser.CompositeFileEntryParser;
 import ch.cyberduck.core.ftp.parser.LaxUnixFTPEntryParser;
 import ch.cyberduck.core.ftp.parser.RumpusFTPEntryParser;
+import ch.cyberduck.core.i18n.Locale;
 
+import org.apache.commons.lang.StringUtils;
 import org.apache.commons.net.ftp.Configurable;
 import org.apache.commons.net.ftp.FTPFileEntryParser;
 import org.apache.commons.net.ftp.parser.NetwareFTPEntryParser;
@@ -32,11 +32,11 @@ import org.apache.commons.net.ftp.parser.ParserInitializationException;
 import org.apache.commons.net.ftp.parser.UnixFTPEntryParser;
 import org.apache.log4j.Logger;
 
+import com.enterprisedt.net.ftp.*;
+
 import java.io.IOException;
 import java.text.MessageFormat;
 import java.util.*;
-
-import com.enterprisedt.net.ftp.*;
 
 /**
  * Opens a connection to the remote server via ftp protocol
@@ -51,6 +51,7 @@ public class FTPSession extends Session {
     }
 
     private static class Factory extends SessionFactory {
+        @Override
         protected Session create(Host h) {
             return new FTPSession(h);
         }
@@ -63,6 +64,7 @@ public class FTPSession extends Session {
         super(h);
     }
 
+    @Override
     protected Path mount(String directory) throws IOException {
         final Path workdir = super.mount(directory);
         if(Preferences.instance().getBoolean("ftp.timezone.auto")) {
@@ -223,6 +225,7 @@ public class FTPSession extends Session {
         return parsers.get(delegate);
     }
 
+    @Override
     public String getIdentification() {
         StringBuffer info = new StringBuffer(super.getIdentification() + "\n");
         try {
@@ -234,6 +237,7 @@ public class FTPSession extends Session {
         return info.toString();
     }
 
+    @Override
     public boolean isConnected() {
         if(FTP != null) {
             return this.FTP.isConnected();
@@ -241,6 +245,7 @@ public class FTPSession extends Session {
         return false;
     }
 
+    @Override
     public void close() {
         try {
             if(this.isConnected()) {
@@ -259,6 +264,7 @@ public class FTPSession extends Session {
         }
     }
 
+    @Override
     public void interrupt() {
         try {
             super.interrupt();
@@ -277,6 +283,7 @@ public class FTPSession extends Session {
         }
     }
 
+    @Override
     public void check() throws IOException {
         try {
             super.check();
@@ -316,13 +323,14 @@ public class FTPSession extends Session {
         client.setConnectMode(this.getConnectMode());
     }
 
+    @Override
     protected void connect() throws IOException, FTPException, ConnectionCanceledException, LoginCanceledException {
         if(this.isConnected()) {
             return;
         }
         this.fireConnectionWillOpenEvent();
 
-        this.message(MessageFormat.format(NSBundle.localizedString("Opening {0} connection to {1}", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("Opening {0} connection to {1}", "Status"),
                 host.getProtocol().getName(), host.getHostname()));
 
         this.configure(this.FTP = this.getClient());
@@ -331,7 +339,7 @@ public class FTPSession extends Session {
         if(!this.isConnected()) {
             throw new ConnectionCanceledException();
         }
-        this.message(MessageFormat.format(NSBundle.localizedString("{0} connection opened", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("{0} connection opened", "Status"),
                 host.getProtocol().getName()));
         this.login();
         this.fireConnectionDidOpenEvent();
@@ -348,7 +356,7 @@ public class FTPSession extends Session {
      */
     protected FTPConnectMode getConnectMode() {
         if(null == this.host.getFTPConnectMode()) {
-            if(Proxy.usePassiveFTP()) {
+            if(ProxyFactory.instance().usePassiveFTP()) {
                 return FTPConnectMode.PASV;
             }
             return FTPConnectMode.ACTIVE;
@@ -357,18 +365,20 @@ public class FTPSession extends Session {
 
     }
 
+    @Override
     protected void login(final Credentials credentials) throws IOException {
         try {
             this.FTP.login(credentials.getUsername(), credentials.getPassword());
-            this.message(NSBundle.localizedString("Login successful", "Credentials", ""));
+            this.message(Locale.localizedString("Login successful", "Credentials"));
         }
         catch(FTPException e) {
-            this.message(NSBundle.localizedString("Login failed", "Credentials", ""));
+            this.message(Locale.localizedString("Login failed", "Credentials"));
             this.login.fail(host, e.getMessage());
             this.login();
         }
     }
 
+    @Override
     public Path workdir() throws IOException {
         if(!this.isConnected()) {
             throw new ConnectionCanceledException();
@@ -382,7 +392,8 @@ public class FTPSession extends Session {
         return workdir;
     }
 
-    protected void setWorkdir(Path workdir) throws IOException {
+    @Override
+    public void setWorkdir(Path workdir) throws IOException {
         if(workdir.equals(this.workdir)) {
             // Do not attempt to change the workdir if the same
             return;
@@ -390,21 +401,29 @@ public class FTPSession extends Session {
         if(!this.isConnected()) {
             throw new ConnectionCanceledException();
         }
-        this.FTP.chdir(workdir.getAbsolute());
+        if(StringUtils.isNotEmpty(workdir.getSymlinkTarget())) {
+            this.FTP.chdir(workdir.getSymlinkTarget());
+        }
+        else {
+            this.FTP.chdir(workdir.getAbsolute());
+        }
         // Workdir change succeeded
-        this.workdir = workdir;
+        super.setWorkdir(workdir);
     }
 
+    @Override
     protected void noop() throws IOException {
         if(this.isConnected()) {
             this.FTP.noop();
         }
     }
 
+    @Override
     public boolean isSendCommandSupported() {
         return true;
     }
 
+    @Override
     public void sendCommand(String command) throws IOException {
         if(this.isConnected()) {
             this.message(command);

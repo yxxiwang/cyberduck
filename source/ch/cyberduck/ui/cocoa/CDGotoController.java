@@ -18,17 +18,18 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSComboBox;
-import com.apple.cocoa.application.NSImageView;
-import com.apple.cocoa.foundation.NSObject;
-
-import ch.cyberduck.core.*;
-
-import org.apache.log4j.Logger;
+import ch.cyberduck.core.NullComparator;
+import ch.cyberduck.core.Path;
+import ch.cyberduck.core.PathFactory;
+import ch.cyberduck.core.PathFilter;
+import ch.cyberduck.ui.cocoa.application.NSComboBox;
+import ch.cyberduck.ui.cocoa.application.NSImageView;
+import ch.cyberduck.ui.cocoa.foundation.NSObject;
 import org.apache.commons.lang.StringUtils;
+import org.apache.log4j.Logger;
+import org.rococoa.cocoa.foundation.NSInteger;
 
 import java.util.Comparator;
-import java.util.List;
 
 /**
  * @version $Id$
@@ -36,53 +37,60 @@ import java.util.List;
 public class CDGotoController extends CDSheetController {
     private static Logger log = Logger.getLogger(CDGotoController.class);
 
-    protected NSImageView iconView; //IBOutlet
+    @Outlet
+    protected NSImageView iconView;
 
     public void setIconView(NSImageView iconView) {
         this.iconView = iconView;
-        this.iconView.setImage(CDIconCache.FOLDER_ICON);
+        this.iconView.setImage(CDIconCache.folderIcon(64));
     }
 
-    private NSComboBox folderCombobox; // IBOutlet
-    private NSObject folderComboboxModel;
+    @Outlet
+    private NSComboBox folderCombobox;
+    private ProxyController folderComboboxModel = new FolderComboboxModel();
 
     public void setFolderCombobox(NSComboBox folderCombobox) {
         this.folderCombobox = folderCombobox;
         this.folderCombobox.setCompletes(true);
         this.folderCombobox.setUsesDataSource(true);
-        this.folderCombobox.setDataSource(this.folderComboboxModel = new NSObject()/*NSComboBox.DataSource*/ {
-            final CDBrowserController c = (CDBrowserController) parent;
-            private final Comparator<Path> comparator = new NullComparator<Path>();
-            private final PathFilter filter = new PathFilter() {
-                public boolean accept(AbstractPath p) {
-                    return p.attributes.isDirectory();
-                }
-            };
-
-            /**
-             * @see NSComboBox.DataSource
-             */
-            public int numberOfItemsInComboBox(NSComboBox combo) {
-                if(!c.isMounted()) {
-                    return 0;
-                }
-                return c.workdir().childs(comparator, filter).size();
-            }
-
-            /**
-             * @see NSComboBox.DataSource
-             */
-            public Object comboBoxObjectValueForItemAtIndex(final NSComboBox sender, final int row) {
-                return c.workdir().childs(comparator, filter).get(row);
-            }
-        });
+        this.folderCombobox.setDataSource(folderComboboxModel.id());
         this.folderCombobox.setStringValue(((CDBrowserController) this.parent).workdir().getAbsolute());
+    }
+
+    private class FolderComboboxModel extends ProxyController implements NSComboBox.DataSource {
+
+        private final Comparator<Path> comparator = new NullComparator<Path>();
+
+        private final PathFilter<Path> filter = new PathFilter<Path>() {
+            public boolean accept(Path p) {
+                return p.attributes.isDirectory();
+            }
+        };
+
+        public NSInteger numberOfItemsInComboBox(NSComboBox combo) {
+            if(!((CDBrowserController) parent).isMounted()) {
+                return new NSInteger(0);
+            }
+            return new NSInteger(((CDBrowserController) parent).workdir().childs(comparator, filter).size());
+        }
+
+        public NSObject comboBox_objectValueForItemAtIndex(final NSComboBox sender, final NSInteger row) {
+            return ((CDBrowserController) parent).workdir().childs(comparator, filter).get(row.intValue()).<NSObject>getReference().unique();
+        }
     }
 
     public CDGotoController(final CDWindowController parent) {
         super(parent);
     }
 
+    @Override
+    protected void invalidate() {
+        folderCombobox.setDelegate(null);
+        folderCombobox.setDataSource(null);
+        super.invalidate();
+    }
+
+    @Override
     public String getBundleName() {
         return "Goto";
     }
@@ -93,6 +101,7 @@ public class CDGotoController extends CDSheetController {
         }
     }
 
+    @Override
     protected boolean validateInput() {
         return StringUtils.isNotBlank(folderCombobox.stringValue());
     }
@@ -106,9 +115,11 @@ public class CDGotoController extends CDSheetController {
         else {
             dir.setPath(filename);
         }
-        c.setWorkdir(dir);
         if(workdir.getParent().equals(dir)) {
-            c.setSelectedPath(workdir);
+            c.setWorkdir(dir, workdir);
+        }
+        else {
+            c.setWorkdir(dir);
         }
     }
 }

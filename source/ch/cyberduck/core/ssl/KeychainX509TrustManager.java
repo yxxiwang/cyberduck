@@ -18,9 +18,8 @@ package ch.cyberduck.core.ssl;
 *  dkocher@cyberduck.ch
 */
 
-import com.apple.cocoa.foundation.NSBundle;
-
-import ch.cyberduck.core.Keychain;
+import ch.cyberduck.core.KeychainFactory;
+import ch.cyberduck.core.i18n.Locale;
 
 import org.apache.log4j.Logger;
 
@@ -52,7 +51,7 @@ public class KeychainX509TrustManager extends AbstractX509TrustManager {
     private void checkCertificates(final X509Certificate[] certs)
             throws CertificateException {
 
-        if(Keychain.instance().isTrusted(this.getHostname(), certs)) {
+        if(KeychainFactory.instance().isTrusted(this.getHostname(), certs)) {
             log.info("Certificate trusted in Keychain");
             // We still accept the certificate if we find it in the Keychain
             // regardless of its trust settings. There is currently no way I am
@@ -62,7 +61,7 @@ public class KeychainX509TrustManager extends AbstractX509TrustManager {
         }
         // The certificate has not been trusted
         throw new CertificateException(
-                NSBundle.localizedString("No trusted certificate found", "Status", ""));
+                Locale.localizedString("No trusted certificate found", "Status"));
     }
 
 }

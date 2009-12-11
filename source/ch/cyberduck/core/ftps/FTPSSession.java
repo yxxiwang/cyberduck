@@ -42,6 +42,7 @@ public class FTPSSession extends FTPSession implements SSLSession {
     }
 
     private static class Factory extends SessionFactory {
+        @Override
         protected Session create(Host h) {
             return new FTPSSession(h);
         }
@@ -73,10 +74,11 @@ public class FTPSSession extends FTPSession implements SSLSession {
      *
      * @param trustManager
      */
-    public void setTrustManager(AbstractX509TrustManager trustManager) {
+    private void setTrustManager(AbstractX509TrustManager trustManager) {
         this.trustManager = trustManager;
     }
 
+    @Override
     protected FTPClient getClient() {
         // AUTH command required before login
         auth = true;
@@ -85,6 +87,7 @@ public class FTPSSession extends FTPSession implements SSLSession {
 
     private boolean auth;
 
+    @Override
     public void login(final Credentials credentials) throws IOException {
         if(auth) {
             // Only send AUTH before the first login attempt
@@ -92,5 +95,7 @@ public class FTPSSession extends FTPSession implements SSLSession {
             auth = false;
         }
         super.login(credentials);
+
+        ((FTPSClient) this.FTP).prot();
     }
 }

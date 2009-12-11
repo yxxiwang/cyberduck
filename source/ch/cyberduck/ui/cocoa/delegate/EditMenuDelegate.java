@@ -18,63 +18,66 @@ package ch.cyberduck.ui.cocoa.delegate;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.*;
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSSelector;
-
+import ch.cyberduck.core.LocalFactory;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.ui.cocoa.CDIconCache;
+import ch.cyberduck.ui.cocoa.application.*;
 import ch.cyberduck.ui.cocoa.odb.EditorFactory;
 
+import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
+import org.rococoa.Foundation;
+import org.rococoa.cocoa.foundation.NSInteger;
 
 /**
  * @version $Id$
  */
-public class EditMenuDelegate extends MenuDelegate {
+public class EditMenuDelegate extends AbstractMenuDelegate {
     private static Logger log = Logger.getLogger(EditMenuDelegate.class);
 
-    /**
-     * @see com.apple.cocoa.application.NSMenu.Delegate
-     */
-    public int numberOfItemsInMenu(NSMenu menu) {
-        int n = EditorFactory.INSTALLED_ODB_EDITORS.size();
+    public NSInteger numberOfItemsInMenu(NSMenu menu) {
+        int n = EditorFactory.getInstalledOdbEditors().size();
         if(0 == n) {
-            return 1;
+            return new NSInteger(1);
         }
-        return n;
+        return new NSInteger(n);
     }
 
-    /**
-     * @see com.apple.cocoa.application.NSMenu.Delegate
-     */
-    public boolean menuUpdateItemAtIndex(NSMenu menu, NSMenuItem item, int index, boolean shouldCancel) {
-        if(EditorFactory.INSTALLED_ODB_EDITORS.size() == 0) {
-            item.setTitle(NSBundle.localizedString("No external editor available"));
+    @Override
+    public boolean menuUpdateItemAtIndex(NSMenu menu, NSMenuItem item, NSInteger index, boolean shouldCancel) {
+        if(shouldCancel) {
             return false;
         }
-        String identifier = EditorFactory.INSTALLED_ODB_EDITORS.values().toArray(
-                new String[EditorFactory.INSTALLED_ODB_EDITORS.size()])[index];
+        if(super.shouldSkipValidation(menu, index.intValue())) {
+            return false;
+        }
+        if(EditorFactory.getInstalledOdbEditors().size() == 0) {
+            item.setTitle(Locale.localizedString("No external editor available"));
+            return false;
+        }
+        String identifier = EditorFactory.getInstalledOdbEditors().values().toArray(
+                new String[EditorFactory.getInstalledOdbEditors().size()])[index.intValue()];
         item.setRepresentedObject(identifier);
-        String editor = EditorFactory.INSTALLED_ODB_EDITORS.keySet().toArray(
-                new String[EditorFactory.INSTALLED_ODB_EDITORS.size()])[index];
+        String editor = EditorFactory.getInstalledOdbEditors().keySet().toArray(
+                new String[EditorFactory.getInstalledOdbEditors().size()])[index.intValue()];
         item.setTitle(editor);
         if(identifier.equals(EditorFactory.getSelectedEditor())) {
             item.setKeyEquivalent("k");
-            item.setKeyEquivalentModifierMask(NSEvent.CommandKeyMask);
+            item.setKeyEquivalentModifierMask(NSEvent.NSCommandKeyMask);
         }
         else {
             item.setKeyEquivalent("");
         }
-        String path = NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier(identifier);
-        if(path != null) {
-            item.setImage(CDIconCache.instance().convert(NSWorkspace.sharedWorkspace().iconForFile(path), 16));
+        final String path = NSWorkspace.sharedWorkspace().absolutePathForAppBundleWithIdentifier(identifier);
+        if(StringUtils.isNotEmpty(path)) {
+            item.setImage(CDIconCache.instance().iconForPath(LocalFactory.createLocal(path), 16));
         }
         else {
             // Used to provide a custom icon for the edit menu and disable the menu
             // if no external editor can be found
-            item.setImage(NSImage.imageNamed("pencil.tiff"));
+            item.setImage(CDIconCache.iconNamed("pencil.tiff"));
         }
-        item.setAction(new NSSelector("editMenuClicked", new Class[]{Object.class}));
+        item.setAction(Foundation.selector("editMenuClicked:"));
         return !shouldCancel;
     }
 }

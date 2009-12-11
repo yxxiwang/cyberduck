@@ -42,9 +42,6 @@ static NSTableColumn *localSelectionColumn;
 	select_string = [[NSMutableString alloc] init];
 	select_timer = nil;
 	autoexpand_timer = nil;
-
-	// First, load the private Quick Look framework if available (10.5+)
-	quickLookAvailable = [[NSBundle bundleWithPath:@"/System/Library/PrivateFrameworks/QuickLookUI.framework"] load];
 }
 
 - (BOOL)acceptsFirstMouse:(NSEvent *)event
@@ -54,11 +51,7 @@ static NSTableColumn *localSelectionColumn;
 
 - (void)dealloc
 {
-    [typeAheadSelectionColumn release];
-    [localSelectionColumn release];
 	[select_string release];
-	[select_timer release];
-	[autoexpand_timer release];
 	[super dealloc];
 }
 
@@ -176,19 +169,14 @@ static NSTableColumn *localSelectionColumn;
 - (NSMenu *) menuForEvent:(NSEvent *) event 
 {
 	NSPoint where = [self convertPoint:[event locationInWindow] fromView:nil];
-	int row = [self rowAtPoint:where];
-	int col = [self columnAtPoint:where];
+	NSInteger row = [self rowAtPoint:where];
 	if(row >= 0) {
-		NSTableColumn *column = nil;
-		if(col >= 0) {
-			column = [[self tableColumns] objectAtIndex:col];
-		}
 		if([[self delegate] respondsToSelector:@selector(tableView:shouldSelectRow:)]) {
 			if([[self delegate] tableView:self shouldSelectRow:row])
-				[self selectRow:row byExtendingSelection:[self isRowSelected:row]];
+				[self selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:[self isRowSelected:row]];
 		} 
 		else {
-			[self selectRow:row byExtendingSelection:[self isRowSelected:row]];
+			[self selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:[self isRowSelected:row]];
 		}
 		return [self menu];
 	}
@@ -225,6 +213,11 @@ static NSTableColumn *localSelectionColumn;
 	return frame;
 }
 
+- (NSRect)previewPanel:(id)panel sourceFrameOnScreenForPreviewItem:(id)item
+{
+    return [self previewPanel:panel frameForURL:[item previewItemURL]];
+}
+
 - (void)keyDown:(NSEvent *)event
 {
 	NSString *str = [event charactersIgnoringModifiers];
@@ -243,46 +236,48 @@ static NSTableColumn *localSelectionColumn;
 		return;
 	} 
 	else if (key == NSLeftArrowFunctionKey) {
-		if(quickLookAvailable && [[QLPreviewPanel sharedPreviewPanel] isOpen]) {
+		if([[QLPreviewPanel sharedPreviewPanel] isOpen]) {
 			[[QLPreviewPanel sharedPreviewPanel] selectPreviousItem];
 			return;
 		}
-		NSEnumerator *enumerator = [self selectedRowEnumerator];
-		id row;
-		while (row = [enumerator nextObject]) {
-			id object = [self itemAtRow:[row intValue]];
+		NSIndexSet *enumerator = [self selectedRowIndexes];
+		NSUInteger index = [enumerator firstIndex]; 
+        while(index != NSNotFound) {
+			id object = [self itemAtRow:index];
 			if (object && [self isExpandable:object] && [self isItemExpanded:object]) {
 				[self collapseItem:object];
-				enumerator = [self selectedRowEnumerator];
+				enumerator = [self selectedRowIndexes];
+				continue;
 			}
+			index = [enumerator indexGreaterThanIndex:index];
 		}
 		return;
 	}
 	else if (key == NSRightArrowFunctionKey) {
-		if(quickLookAvailable && [[QLPreviewPanel sharedPreviewPanel] isOpen]) {
+		if([[QLPreviewPanel sharedPreviewPanel] isOpen]) {
 			[[QLPreviewPanel sharedPreviewPanel] selectNextItem];
 			return;
 		}
-		NSEnumerator *enumerator = [self selectedRowEnumerator];
-		id row;
-		while (row = [enumerator nextObject]) {
-			id object = [self itemAtRow:[row intValue]];
+		NSIndexSet *enumerator = [self selectedRowIndexes];
+		NSUInteger index = [enumerator firstIndex]; 
+        while(index != NSNotFound) {
+			id object = [self itemAtRow:index];
 			if (object && [self isExpandable:object] && ![self isItemExpanded:object]) {
 				[self expandItem:object];
-				enumerator = [self selectedRowEnumerator];
+				enumerator = [self selectedRowIndexes];
+				continue;
 			}
+			index = [enumerator indexGreaterThanIndex:index];
 		}
 		return;
 	}
 	else if(key == ' ') {
-		if(quickLookAvailable) {
-			if ([[self delegate] respondsToSelector:@selector(spaceKeyPressed:)]) {
-				[[[QLPreviewPanel sharedPreviewPanel] windowController] setDelegate:self];
-				// Space bar invokes Quick Look
-				[[self delegate] performSelector:@selector(spaceKeyPressed:) withObject:event];
-			}
-			return;
-		}
+        if ([[self delegate] respondsToSelector:@selector(spaceKeyPressed:)]) {
+            [[[QLPreviewPanel sharedPreviewPanel] windowController] setDelegate:self];
+            // Space bar invokes Quick Look
+            [[self delegate] performSelector:@selector(spaceKeyPressed:) withObject:event];
+        }
+        return;
 	}
 	if (([[NSCharacterSet alphanumericCharacterSet] characterIsMember:key] ||
 			[[NSCharacterSet punctuationCharacterSet] characterIsMember:key] ||
@@ -350,7 +345,7 @@ static NSTableColumn *localSelectionColumn;
 		}
 	}
 	if (row != -1) {
-		[self selectRow:row byExtendingSelection:NO];
+		[self selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO];
 		[self scrollRowToVisible:row];
 	}	
 }

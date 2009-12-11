@@ -18,13 +18,15 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.*;
-import com.apple.cocoa.foundation.*;
-
 import ch.cyberduck.core.*;
+import ch.cyberduck.core.i18n.Locale;
+import ch.cyberduck.ui.cocoa.application.*;
+import ch.cyberduck.ui.cocoa.foundation.*;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
+import org.rococoa.Foundation;
+import org.rococoa.ID;
 
 /**
  * @version $Id$
@@ -32,7 +34,7 @@ import org.apache.log4j.Logger;
 public class CDLoginController extends AbstractLoginController implements LoginController {
     private static Logger log = Logger.getLogger(CDLoginController.class);
 
-    CDWindowController parent;
+    private CDWindowController parent;
 
     public CDLoginController(final CDWindowController parent) {
         this.parent = parent;
@@ -44,34 +46,39 @@ public class CDLoginController extends AbstractLoginController implements LoginC
         final Credentials credentials = host.getCredentials();
 
         CDSheetController c = new CDSheetController(parent) {
+            @Override
             protected String getBundleName() {
                 return "Login";
             }
 
+            @Override
             public void awakeFromNib() {
                 this.update();
+                super.awakeFromNib();
             }
 
-            private NSTextField titleField; // IBOutlet
+            @Outlet
+            private NSTextField titleField;
 
             public void setTitleField(NSTextField titleField) {
                 this.titleField = titleField;
-                this.updateField(this.titleField, reason);
+                this.updateField(this.titleField, Locale.localizedString(reason, "Credentials"));
             }
 
-            private NSTextField userField; // IBOutlet
+            @Outlet
+            private NSTextField userField;
 
             public void setUserField(NSTextField userField) {
                 this.userField = userField;
                 this.updateField(this.userField, credentials.getUsername());
                 if(host.getProtocol().equals(Protocol.S3)) {
-                    ((NSTextFieldCell) this.userField.cell()).setPlaceholderString(
-                            NSBundle.localizedString("Access Key ID", "S3", "")
+                    this.userField.cell().setPlaceholderString(
+                            Locale.localizedString("Access Key ID", "S3")
                     );
                 }
-                NSNotificationCenter.defaultCenter().addObserver(this,
-                        new NSSelector("userFieldTextDidChange", new Class[]{NSNotification.class}),
-                        NSControl.ControlTextDidChangeNotification,
+                NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                        Foundation.selector("userFieldTextDidChange:"),
+                        NSControl.NSControlTextDidChangeNotification,
                         this.userField);
             }
 
@@ -80,26 +87,28 @@ public class CDLoginController extends AbstractLoginController implements LoginC
                 this.update();
             }
 
-            private NSTextField textField; // IBOutlet
+            @Outlet
+            private NSTextField textField;
 
             public void setTextField(NSTextField textField) {
                 this.textField = textField;
-                this.updateField(this.textField, message);
+                this.updateField(this.textField, Locale.localizedString(message, "Credentials"));
             }
 
-            private NSSecureTextField passField; // IBOutlet
+            @Outlet
+            private NSSecureTextField passField;
 
             public void setPassField(NSSecureTextField passField) {
                 this.passField = passField;
                 this.updateField(this.passField, credentials.getPassword());
                 if(host.getProtocol().equals(Protocol.S3)) {
-                    ((NSTextFieldCell) this.passField.cell()).setPlaceholderString(
-                            NSBundle.localizedString("Secret Access Key", "S3", "")
+                    this.passField.cell().setPlaceholderString(
+                            Locale.localizedString("Secret Access Key", "S3")
                     );
                 }
-                NSNotificationCenter.defaultCenter().addObserver(this,
-                        new NSSelector("passFieldTextDidChange", new Class[]{NSNotification.class}),
-                        NSControl.ControlTextDidChangeNotification,
+                NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                        Foundation.selector("passFieldTextDidChange:"),
+                        NSControl.NSControlTextDidChangeNotification,
                         this.passField);
             }
 
@@ -107,34 +116,37 @@ public class CDLoginController extends AbstractLoginController implements LoginC
                 credentials.setPassword(passField.stringValue());
             }
 
+            @Outlet
             private NSButton keychainCheckbox;
 
             public void setKeychainCheckbox(NSButton keychainCheckbox) {
                 this.keychainCheckbox = keychainCheckbox;
                 this.keychainCheckbox.setState(Preferences.instance().getBoolean("connection.login.useKeychain")
-                        && Preferences.instance().getBoolean("connection.login.addKeychain") ? NSCell.OnState : NSCell.OffState);
-                this.keychainCheckbox.setTarget(this);
-                this.keychainCheckbox.setAction(new NSSelector("keychainCheckboxClicked", new Class[]{NSButton.class}));
+                        && Preferences.instance().getBoolean("connection.login.addKeychain") ? NSCell.NSOnState : NSCell.NSOffState);
+                this.keychainCheckbox.setTarget(this.id());
+                this.keychainCheckbox.setAction(Foundation.selector("keychainCheckboxClicked:"));
             }
 
             public void keychainCheckboxClicked(final NSButton sender) {
-                credentials.setUseKeychain(sender.state() == NSCell.OnState);
+                credentials.setUseKeychain(sender.state() == NSCell.NSOnState);
             }
 
+            @Outlet
             private NSButton anonymousCheckbox;
 
             public void setAnonymousCheckbox(NSButton anonymousCheckbox) {
                 this.anonymousCheckbox = anonymousCheckbox;
-                this.anonymousCheckbox.setTarget(this);
-                this.anonymousCheckbox.setAction(new NSSelector("anonymousCheckboxClicked", new Class[]{NSButton.class}));
+                this.anonymousCheckbox.setTarget(this.id());
+                this.anonymousCheckbox.setAction(Foundation.selector("anonymousCheckboxClicked:"));
             }
 
+            @Action
             public void anonymousCheckboxClicked(final NSButton sender) {
-                if(sender.state() == NSCell.OnState) {
+                if(sender.state() == NSCell.NSOnState) {
                     credentials.setUsername(Preferences.instance().getProperty("connection.login.anon.name"));
                     credentials.setPassword(Preferences.instance().getProperty("connection.login.anon.pass"));
                 }
-                if(sender.state() == NSCell.OffState) {
+                if(sender.state() == NSCell.NSOffState) {
                     credentials.setUsername(Preferences.instance().getProperty("connection.login.name"));
                     credentials.setPassword(null);
                 }
@@ -143,91 +155,90 @@ public class CDLoginController extends AbstractLoginController implements LoginC
                 this.update();
             }
 
+            @Outlet
             private NSTextField pkLabel;
 
             public void setPkLabel(NSTextField pkLabel) {
                 this.pkLabel = pkLabel;
             }
 
+            @Outlet
             private NSButton pkCheckbox;
 
             public void setPkCheckbox(NSButton pkCheckbox) {
                 this.pkCheckbox = pkCheckbox;
-                this.pkCheckbox.setTarget(this);
-                this.pkCheckbox.setAction(new NSSelector("pkCheckboxSelectionChanged", new Class[]{Object.class}));
+                this.pkCheckbox.setTarget(this.id());
+                this.pkCheckbox.setAction(Foundation.selector("pkCheckboxSelectionChanged:"));
             }
 
             private NSOpenPanel publicKeyPanel;
 
+            @Action
             public void pkCheckboxSelectionChanged(final NSButton sender) {
                 log.debug("pkCheckboxSelectionChanged");
-                if(this.pkLabel.stringValue().equals(NSBundle.localizedString("No Private Key selected", ""))) {
+                if(sender.state() == NSCell.NSOnState) {
                     publicKeyPanel = NSOpenPanel.openPanel();
                     publicKeyPanel.setCanChooseDirectories(false);
                     publicKeyPanel.setCanChooseFiles(true);
                     publicKeyPanel.setAllowsMultipleSelection(false);
-                    publicKeyPanel.beginSheetForDirectory(NSPathUtilities.stringByExpandingTildeInPath("~/.ssh"), null, null, this.window(),
-                            this,
-                            new NSSelector("pkSelectionPanelDidEnd", new Class[]{NSOpenPanel.class, int.class, Object.class}), null);
+                    publicKeyPanel.beginSheetForDirectory(LocalFactory.createLocal("~/.ssh").getAbsolute(),
+                            null, this.window(), this.id(),
+                            Foundation.selector("pkSelectionPanelDidEnd:returnCode:contextInfo:"), null);
                 }
                 else {
-                    credentials.setIdentity(null);
-                    this.update();
+                    this.pkSelectionPanelDidEnd_returnCode_contextInfo(publicKeyPanel, NSPanel.NSCancelButton, null);
                 }
             }
 
-            public void pkSelectionPanelDidEnd(NSOpenPanel sheet, int returncode, Object context) {
+            public void pkSelectionPanelDidEnd_returnCode_contextInfo(NSOpenPanel sheet, int returncode, ID contextInfo) {
                 log.debug("pkSelectionPanelDidEnd");
-                if(returncode == NSPanel.OKButton) {
+                if(returncode == NSPanel.NSOKButton) {
                     NSArray selected = sheet.filenames();
-                    java.util.Enumeration enumerator = selected.objectEnumerator();
-                    while(enumerator.hasMoreElements()) {
-                        credentials.setIdentity(new Credentials.Identity((String) enumerator.nextElement()));
+                    final NSEnumerator enumerator = selected.objectEnumerator();
+                    NSObject next;
+                    while((next = enumerator.nextObject()) != null) {
+                        credentials.setIdentity(LocalFactory.createLocal(next.toString()));
                     }
                 }
-                if(returncode == NSPanel.CancelButton) {
+                if(returncode == NSPanel.NSCancelButton) {
                     credentials.setIdentity(null);
                 }
-                publicKeyPanel = null;
-                this.update();
+                update();
             }
 
             private void update() {
                 this.userField.setEnabled(!credentials.isAnonymousLogin());
                 this.passField.setEnabled(!credentials.isAnonymousLogin());
                 this.keychainCheckbox.setEnabled(!credentials.isAnonymousLogin());
-                this.anonymousCheckbox.setState(credentials.isAnonymousLogin() ? NSCell.OnState : NSCell.OffState);
+                this.anonymousCheckbox.setState(credentials.isAnonymousLogin() ? NSCell.NSOnState : NSCell.NSOffState);
                 this.pkCheckbox.setEnabled(host.getProtocol().equals(Protocol.SFTP));
                 if(credentials.isPublicKeyAuthentication()) {
-                    this.pkCheckbox.setState(NSCell.OnState);
+                    this.pkCheckbox.setState(NSCell.NSOnState);
                     this.updateField(this.pkLabel, credentials.getIdentity().toURL());
                 }
                 else {
-                    this.pkCheckbox.setState(NSCell.OffState);
-                    this.pkLabel.setStringValue(NSBundle.localizedString("No Private Key selected", ""));
+                    this.pkCheckbox.setState(NSCell.NSOffState);
+                    this.pkLabel.setStringValue(Locale.localizedString("No Private Key selected"));
                 }
             }
 
+            @Override
             protected boolean validateInput() {
                 return StringUtils.isNotEmpty(credentials.getUsername());
             }
 
             public void callback(final int returncode) {
                 if(returncode == CDSheetCallback.DEFAULT_OPTION) {
-                    this.window().endEditingForObject(null);
-                    credentials.setUsername((String) userField.objectValue());
-                    credentials.setPassword((String) passField.objectValue());
+                    this.window().endEditingFor(null);
+                    credentials.setUsername(userField.stringValue());
+                    credentials.setPassword(passField.stringValue());
                 }
             }
         };
         c.beginSheet();
 
-        if(c.returnCode() == CDSheetCallback.CANCEL_OPTION) {
+        if(c.returnCode() == CDSheetCallback.ALTERNATE_OPTION) {
             throw new LoginCanceledException();
         }
-    }
-
-    protected String getBundleName() {
-        return null;
     }
 }

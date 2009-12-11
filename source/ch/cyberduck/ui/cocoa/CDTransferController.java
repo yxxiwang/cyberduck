@@ -18,71 +18,75 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.*;
-import com.apple.cocoa.foundation.*;
-
 import ch.cyberduck.core.*;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.core.io.BandwidthThrottle;
-import ch.cyberduck.ui.cocoa.delegate.MenuDelegate;
-import ch.cyberduck.ui.cocoa.threading.AbstractBackgroundAction;
-import ch.cyberduck.ui.cocoa.threading.RepeatableBackgroundAction;
+import ch.cyberduck.core.threading.AbstractBackgroundAction;
+import ch.cyberduck.ui.cocoa.application.*;
+import ch.cyberduck.ui.cocoa.delegate.AbstractMenuDelegate;
+import ch.cyberduck.ui.cocoa.foundation.*;
+import ch.cyberduck.ui.cocoa.threading.AlertRepeatableBackgroundAction;
 import ch.cyberduck.ui.cocoa.threading.WindowMainAction;
-import ch.cyberduck.ui.cocoa.util.HyperlinkAttributedStringFactory;
 
 import org.apache.log4j.Logger;
+import org.rococoa.Foundation;
+import org.rococoa.ID;
+import org.rococoa.Rococoa;
+import org.rococoa.Selector;
+import org.rococoa.cocoa.CGFloat;
+import org.rococoa.cocoa.foundation.NSInteger;
+import org.rococoa.cocoa.foundation.NSSize;
+import org.rococoa.cocoa.foundation.NSUInteger;
+
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * @version $Id$
  */
-public class CDTransferController extends CDWindowController implements NSToolbarItem.ItemValidation {
+public class CDTransferController extends CDWindowController implements NSToolbar.Delegate {
     private static Logger log = Logger.getLogger(CDTransferController.class);
 
-    private static CDTransferController instance;
+    private static CDTransferController instance = null;
 
     private NSToolbar toolbar;
 
+    @Override
     public void awakeFromNib() {
-        this.toolbar = new NSToolbar("Queue Toolbar");
-        this.toolbar.setDelegate(this);
+        this.toolbar = NSToolbar.toolbarWithIdentifier("Queue Toolbar");
+        this.toolbar.setDelegate(this.id());
         this.toolbar.setAllowsUserCustomization(true);
         this.toolbar.setAutosavesConfiguration(true);
         this.window.setToolbar(toolbar);
+
+        super.awakeFromNib();
     }
 
+    @Override
     public void setWindow(NSWindow window) {
-        this.window = window;
-        this.window.setReleasedWhenClosed(false);
-        this.window.setDelegate(this);
-        this.window.setMovableByWindowBackground(true);
-        this.window.setTitle(NSBundle.localizedString("Transfers", ""));
+        window.setMovableByWindowBackground(true);
+        window.setTitle(Locale.localizedString("Transfers"));
+        window.setDelegate(this.id());
+        super.setWindow(window);
     }
 
-    /**
-     * @param notification
-     */
+    @Override
+    public boolean isSingleton() {
+        return true;
+    }
+
+    @Override
     public void windowDidBecomeKey(NSNotification notification) {
         this.updateHighlight();
     }
 
-    /**
-     * @param notification
-     */
+    @Override
     public void windowDidResignKey(NSNotification notification) {
         this.updateHighlight();
     }
 
-    /**
-     * @param notification
-     */
-    public void windowWillClose(NSNotification notification) {
-        // Do not call super as we are a singleton. super#windowWillClose would invalidate me
-    }
-
-    // ----------------------------------------------------------
-    // Outlets
-    // ----------------------------------------------------------
-
-    private NSTextField urlField; // IBOutlet
+    @Outlet
+    private NSTextField urlField;
 
     public void setUrlField(NSTextField urlField) {
         this.urlField = urlField;
@@ -90,59 +94,59 @@ public class CDTransferController extends CDWindowController implements NSToolba
         this.urlField.setSelectable(true);
     }
 
-    private NSTextField localField; // IBOutlet
+    @Outlet
+    private NSTextField localField;
 
     public void setLocalField(NSTextField localField) {
         this.localField = localField;
     }
 
-    private NSImageView iconView; //IBOutlet
+    @Outlet
+    private NSImageView iconView;
 
     public void setIconView(final NSImageView iconView) {
         this.iconView = iconView;
     }
 
-    private NSStepper queueSizeStepper; // IBOutlet
+    @Outlet
+    private NSStepper queueSizeStepper;
 
     public void setQueueSizeStepper(final NSStepper queueSizeStepper) {
         this.queueSizeStepper = queueSizeStepper;
-        this.queueSizeStepper.setTarget(this);
-        this.queueSizeStepper.setAction(new NSSelector("queueSizeStepperChanged", new Class[]{Object.class}));
+        this.queueSizeStepper.setTarget(this.id());
+        this.queueSizeStepper.setAction(Foundation.selector("queueSizeStepperChanged:"));
     }
 
-    public void queueSizeStepperChanged(final Object sender) {
+    @Action
+    public void queueSizeStepperChanged(final ID sender) {
         synchronized(Queue.instance()) {
             Queue.instance().notify();
         }
     }
 
-    private NSTextField filterField; // IBOutlet
+    @Outlet
+    private NSTextField filterField;
 
     public void setFilterField(NSTextField filterField) {
         this.filterField = filterField;
-        NSNotificationCenter.defaultCenter().addObserver(this,
-                new NSSelector("filterFieldTextDidChange", new Class[]{NSNotification.class}),
-                NSControl.ControlTextDidChangeNotification,
+        NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                Foundation.selector("filterFieldTextDidChange:"),
+                NSControl.NSControlTextDidChangeNotification,
                 this.filterField);
     }
 
     public void filterFieldTextDidChange(NSNotification notification) {
-        NSDictionary userInfo = notification.userInfo();
-        if(null != userInfo) {
-            Object o = userInfo.allValues().lastObject();
-            if(null != o) {
-                final String searchString = ((NSText) o).string();
-                transferModel.setFilter(searchString);
-                this.reloadData();
-            }
-        }
+        transferModel.setFilter(filterField.stringValue());
+        this.reloadData();
     }
 
     /**
      * Change focus to filter field
+     *
      * @param sender
      */
-    public void searchButtonClicked(final Object sender) {
+    @Action
+    public void searchButtonClicked(final ID sender) {
         this.window().makeFirstResponder(this.filterField);
     }
 
@@ -150,97 +154,98 @@ public class CDTransferController extends CDWindowController implements NSToolba
 
     private NSDrawer logDrawer;
 
-    private NSDrawer.Notifications logDrawerNotifications = new NSDrawer.Notifications() {
-        public void drawerWillOpen(NSNotification notification) {
-            logDrawer.setContentSize(new NSSize(
-                    logDrawer.contentSize().height(),
-                    Preferences.instance().getFloat("queue.logDrawer.size.height")
-            ));
-        }
+    public void drawerWillOpen(NSNotification notification) {
+        logDrawer.setContentSize(new NSSize(logDrawer.contentSize().width.doubleValue(),
+                Preferences.instance().getDouble("queue.logDrawer.size.height")
+        ));
+    }
 
-        public void drawerDidOpen(NSNotification notification) {
-            Preferences.instance().setProperty("queue.logDrawer.isOpen", true);
-        }
+    public void drawerDidOpen(NSNotification notification) {
+        Preferences.instance().setProperty("queue.logDrawer.isOpen", true);
+    }
 
-        public void drawerWillClose(NSNotification notification) {
-            Preferences.instance().setProperty("queue.logDrawer.size.height",
-                    logDrawer.contentSize().height());
-        }
+    public void drawerWillClose(NSNotification notification) {
+        Preferences.instance().setProperty("queue.logDrawer.size.height",
+                logDrawer.contentSize().height.doubleValue());
+    }
 
-        public void drawerDidClose(NSNotification notification) {
-            Preferences.instance().setProperty("queue.logDrawer.isOpen", false);
-        }
-    };
+    public void drawerDidClose(NSNotification notification) {
+        Preferences.instance().setProperty("queue.logDrawer.isOpen", false);
+    }
 
     public void setLogDrawer(NSDrawer logDrawer) {
         this.logDrawer = logDrawer;
         this.transcript = new CDTranscriptController();
         this.logDrawer.setContentView(this.transcript.getLogView());
-        NSNotificationCenter.defaultCenter().addObserver(logDrawerNotifications,
-                new NSSelector("drawerWillOpen", new Class[]{NSNotification.class}),
+        NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                Foundation.selector("drawerWillOpen:"),
                 NSDrawer.DrawerWillOpenNotification,
                 this.logDrawer);
-        NSNotificationCenter.defaultCenter().addObserver(logDrawerNotifications,
-                new NSSelector("drawerDidOpen", new Class[]{NSNotification.class}),
+        NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                Foundation.selector("drawerDidOpen:"),
                 NSDrawer.DrawerDidOpenNotification,
                 this.logDrawer);
-        NSNotificationCenter.defaultCenter().addObserver(logDrawerNotifications,
-                new NSSelector("drawerWillClose", new Class[]{NSNotification.class}),
+        NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                Foundation.selector("drawerWillClose:"),
                 NSDrawer.DrawerWillCloseNotification,
                 this.logDrawer);
-        NSNotificationCenter.defaultCenter().addObserver(logDrawerNotifications,
-                new NSSelector("drawerDidClose", new Class[]{NSNotification.class}),
+        NSNotificationCenter.defaultCenter().addObserver(this.id(),
+                Foundation.selector("drawerDidClose:"),
                 NSDrawer.DrawerDidCloseNotification,
                 this.logDrawer);
     }
 
-    public void toggleLogDrawer(final Object sender) {
-        this.logDrawer.toggle(this);
+    public void toggleLogDrawer(final ID sender) {
+        this.logDrawer.toggle(sender);
     }
 
+    @Outlet
     private NSPopUpButton bandwidthPopup;
 
-    private MenuDelegate bandwidthPopupDelegate;
+    private AbstractMenuDelegate bandwidthPopupDelegate;
 
     public void setBandwidthPopup(NSPopUpButton bandwidthPopup) {
         this.bandwidthPopup = bandwidthPopup;
         this.bandwidthPopup.setEnabled(false);
         this.bandwidthPopup.setAllowsMixedState(true);
-        this.bandwidthPopup.setTarget(this);
-        this.bandwidthPopup.setAction(new NSSelector("bandwidthPopupChanged", new Class[]{Object.class}));
-        this.bandwidthPopup.itemAtIndex(0).setImage(CDIconCache.instance().iconForName("bandwidth", 16));
-        this.bandwidthPopup.menu().setDelegate(this.bandwidthPopupDelegate = new BandwidthDelegate());
+        this.bandwidthPopup.setTarget(this.id());
+        this.bandwidthPopup.setAction(Foundation.selector("bandwidthPopupChanged:"));
+        this.bandwidthPopup.itemAtIndex(0).setImage(CDIconCache.iconNamed("bandwidth", 16));
+        this.bandwidthPopup.menu().setDelegate((this.bandwidthPopupDelegate = new BandwidthDelegate()).id());
     }
 
-    private class BandwidthDelegate extends MenuDelegate {
-        public int numberOfItemsInMenu(NSMenu menu) {
+    private class BandwidthDelegate extends AbstractMenuDelegate {
+        public NSInteger numberOfItemsInMenu(NSMenu menu) {
             return menu.numberOfItems();
         }
 
-        public boolean menuUpdateItemAtIndex(NSMenu menu, NSMenuItem item, int index, boolean shouldCancel) {
-            final int selected = transferTable.numberOfSelectedRows();
+        @Override
+        public boolean menuUpdateItemAtIndex(NSMenu menu, NSMenuItem item, NSInteger i, boolean shouldCancel) {
+            if(super.shouldSkipValidation(menu, i.intValue())) {
+                return false;
+            }
+            final int selected = transferTable.numberOfSelectedRows().intValue();
             final int tag = item.tag();
-            NSEnumerator iterator = transferTable.selectedRowEnumerator();
-            while(iterator.hasMoreElements()) {
-                int i = ((Number) iterator.nextElement()).intValue();
-                Transfer transfer = (Transfer) TransferCollection.instance().get(i);
+            NSIndexSet iterator = transferTable.selectedRowIndexes();
+            for(NSUInteger index = iterator.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = iterator.indexGreaterThanIndex(index)) {
+                Transfer transfer = TransferCollection.instance().get(index.intValue());
                 if(BandwidthThrottle.UNLIMITED == transfer.getBandwidth()) {
                     if(BandwidthThrottle.UNLIMITED == tag) {
-                        item.setState(selected > 1 ? NSCell.MixedState : NSCell.OnState);
+                        item.setState(selected > 1 ? NSCell.NSMixedState : NSCell.NSOnState);
                         break;
                     }
                     else {
-                        item.setState(NSCell.OffState);
+                        item.setState(NSCell.NSOffState);
                     }
                 }
                 else {
                     int bandwidth = (int) transfer.getBandwidth() / 1024;
                     if(tag == bandwidth) {
-                        item.setState(selected > 1 ? NSCell.MixedState : NSCell.OnState);
+                        item.setState(selected > 1 ? NSCell.NSMixedState : NSCell.NSOnState);
                         break;
                     }
                     else {
-                        item.setState(NSCell.OffState);
+                        item.setState(NSCell.NSOffState);
                     }
                 }
             }
@@ -248,15 +253,15 @@ public class CDTransferController extends CDWindowController implements NSToolba
         }
     }
 
+    @Action
     public void bandwidthPopupChanged(NSPopUpButton sender) {
-        NSEnumerator iterator = transferTable.selectedRowEnumerator();
+        NSIndexSet iterator = transferTable.selectedRowIndexes();
         int bandwidth = BandwidthThrottle.UNLIMITED;
         if(sender.selectedItem().tag() > 0) {
             bandwidth = sender.selectedItem().tag() * 1024; // from Kilobytes to Bytes
         }
-        while(iterator.hasMoreElements()) {
-            int i = ((Number) iterator.nextElement()).intValue();
-            Transfer transfer = (Transfer) TransferCollection.instance().get(i);
+        for(NSUInteger index = iterator.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = iterator.indexGreaterThanIndex(index)) {
+            Transfer transfer = TransferCollection.instance().get(index.intValue());
             transfer.setBandwidth(bandwidth);
         }
         this.updateBandwidthPopup();
@@ -265,7 +270,7 @@ public class CDTransferController extends CDWindowController implements NSToolba
     private CDTransferController() {
         this.loadBundle();
     }
-
+    
     public static CDTransferController instance() {
         synchronized(NSApplication.sharedApplication()) {
             if(null == instance) {
@@ -275,30 +280,40 @@ public class CDTransferController extends CDWindowController implements NSToolba
         }
     }
 
+    @Override
     protected String getBundleName() {
         return "Transfer";
+    }
+
+    @Override
+    protected void invalidate() {
+        toolbar.setDelegate(null);
+        toolbarItems.clear();
+        transferModel.invalidate();
+        bandwidthPopup.menu().setDelegate(null);
+        super.invalidate();
     }
 
     /*
       * @return NSApplication.TerminateLater or NSApplication.TerminateNow depending if there are
       * running transfers to be checked first
       */
-    public static int applicationShouldTerminate(final NSApplication app) {
+    public static NSUInteger applicationShouldTerminate(final NSApplication app) {
         if(null != instance) {
             //Saving state of transfer window
             Preferences.instance().setProperty("queue.openByDefault", instance.window().isVisible());
             if(TransferCollection.instance().numberOfRunningTransfers() > 0) {
-                NSWindow sheet = NSAlertPanel.criticalAlertPanel(NSBundle.localizedString("Transfer in progress", ""), //title
-                        NSBundle.localizedString("There are files currently being transferred. Quit anyway?", ""), // message
-                        NSBundle.localizedString("Quit", ""), // defaultbutton
-                        NSBundle.localizedString("Cancel", ""), //alternative button
+                final NSAlert alert = NSAlert.alert(Locale.localizedString("Transfer in progress"), //title
+                        Locale.localizedString("There are files currently being transferred. Quit anyway?"), // message
+                        Locale.localizedString("Quit"), // defaultbutton
+                        Locale.localizedString("Cancel"), //alternative button
                         null //other button
                 );
-                instance.alert(sheet, new CDSheetCallback() {
+                instance.alert(alert, new CDSheetCallback() {
                     public void callback(int returncode) {
                         if(returncode == DEFAULT_OPTION) { //Quit
                             for(int i = 0; i < TransferCollection.instance().size(); i++) {
-                                Transfer transfer = (Transfer) TransferCollection.instance().get(i);
+                                Transfer transfer = TransferCollection.instance().get(i);
                                 if(transfer.isRunning()) {
                                     transfer.interrupt();
                                 }
@@ -310,81 +325,87 @@ public class CDTransferController extends CDWindowController implements NSToolba
                         }
                     }
                 });
-                return NSApplication.TerminateLater; //break
+                return NSApplication.NSTerminateLater; //break
             }
         }
-        return NSApplication.TerminateNow;
+        return NSApplication.NSTerminateNow;
+    }
+
+    private final TableColumnFactory tableColumnsFactory = new TableColumnFactory();
+
+    private static class TableColumnFactory extends HashMap<String,NSTableColumn> {
+        private NSTableColumn create(String identifier) {
+            if(!this.containsKey(identifier)) {
+                this.put(identifier, NSTableColumn.tableColumnWithIdentifier(identifier));
+            }
+            return this.get(identifier);
+        }
     }
 
     private CDTransferTableDataSource transferModel;
-    private NSTableView transferTable; // IBOutlet
-    private CDTableDelegate<Transfer> delegate;
+    @Outlet
+    private NSTableView transferTable;
+    private CDAbstractTableDelegate<Transfer> delegate;
 
     public void setQueueTable(NSTableView view) {
         this.transferTable = view;
-        this.transferTable.setDataSource(this.transferModel = new CDTransferTableDataSource());
-        this.transferTable.setDelegate(this.delegate = new CDAbstractTableDelegate<Transfer>() {
+        this.transferTable.setDataSource((this.transferModel = new CDTransferTableDataSource()).id());
+        this.transferTable.setDelegate((this.delegate = new CDAbstractTableDelegate<Transfer>() {
             public String tooltip(Transfer t) {
                 return t.getName();
             }
 
-            public String tooltip(int row) {
-                return this.tooltip(transferModel.getSource().get(row));
-            }
-
-            public void enterKeyPressed(final Object sender) {
+            public void enterKeyPressed(final ID sender) {
                 this.tableRowDoubleClicked(sender);
             }
 
-            public void deleteKeyPressed(final Object sender) {
+            public void deleteKeyPressed(final ID sender) {
                 deleteButtonClicked(sender);
             }
 
+            @Override
             public void tableColumnClicked(NSTableView view, NSTableColumn tableColumn) {
                 ;
             }
 
-            public void tableRowDoubleClicked(final Object sender) {
+            @Override
+            public void tableRowDoubleClicked(final ID sender) {
                 reloadButtonClicked(sender);
             }
 
+            @Override
             public void selectionIsChanging(NSNotification notification) {
                 updateHighlight();
             }
 
+            @Override
             public void selectionDidChange(NSNotification notification) {
                 updateHighlight();
                 updateSelection();
             }
-        });
+
+            public void tableView_willDisplayCell_forTableColumn_row(NSTableView view, NSCell cell, NSTableColumn tableColumn, NSInteger row) {
+                Rococoa.cast(cell, CDControllerCell.class).setView(transferModel.getController(row.intValue()).view());
+            }
+        }).id());
         // receive drag events from types
         // in fact we are not interested in file promises, but because the browser model can only initiate
         // a drag with tableView.dragPromisedFilesOfTypes(), we listens for those events
         // and then use the private pasteboard instead.
-        this.transferTable.registerForDraggedTypes(new NSArray(new Object[]{
-                CDPasteboards.TransferPasteboardType,
+        this.transferTable.registerForDraggedTypes(NSArray.arrayWithObjects(
                 NSPasteboard.StringPboardType,
-                NSPasteboard.FilesPromisePboardType}));
+                NSPasteboard.FilesPromisePboardType));
 
-        NSSelector setResizableMaskSelector
-                = new NSSelector("setResizingMask", new Class[]{int.class});
         {
-            NSTableColumn c = new NSTableColumn();
-            c.setIdentifier(CDTransferTableDataSource.PROGRESS_COLUMN);
+            NSTableColumn c = tableColumnsFactory.create(CDTransferTableDataSource.PROGRESS_COLUMN);
             c.setMinWidth(80f);
             c.setWidth(300f);
-            if(setResizableMaskSelector.implementedByClass(NSTableColumn.class)) {
-                c.setResizingMask(NSTableColumn.AutoresizingMask);
-            }
-            else {
-                c.setResizable(true);
-            }
-            final CDControllerCell cell = new CDControllerCell();
-            c.setDataCell(cell);
+            c.setResizingMask(NSTableColumn.NSTableColumnAutoresizingMask);
+            c.setDataCell(prototype);
             this.transferTable.addTableColumn(c);
         }
-        this.transferTable.setGridStyleMask(NSTableView.SolidHorizontalGridLineMask);
-        this.transferTable.setRowHeight(82f);
+        this.transferTable.setGridStyleMask(NSTableView.NSTableViewSolidHorizontalGridLineMask);
+        this.transferTable.setRowHeight(new CGFloat(82));
         //selection properties
         this.transferTable.setAllowsMultipleSelection(true);
         this.transferTable.setAllowsEmptySelection(true);
@@ -392,14 +413,15 @@ public class CDTransferController extends CDWindowController implements NSToolba
         this.transferTable.sizeToFit();
     }
 
+    private final NSCell prototype = CDControllerCell.controllerCell();
+
     /**
      *
      */
     private void updateHighlight() {
         boolean isKeyWindow = window().isKeyWindow();
         for(int i = 0; i < transferModel.getSource().size(); i++) {
-            transferModel.setHighlighted(transferModel.getSource().get(i),
-                    transferTable.isRowSelected(i) && isKeyWindow);
+            transferModel.setHighlighted(i, transferTable.isRowSelected(new NSInteger(i)) && isKeyWindow);
         }
     }
 
@@ -419,21 +441,18 @@ public class CDTransferController extends CDWindowController implements NSToolba
      */
     private void updateLabels() {
         log.debug("updateLabels");
-        final int selected = transferTable.numberOfSelectedRows();
+        final int selected = transferTable.numberOfSelectedRows().intValue();
         if(1 == selected) {
-            final Transfer transfer = (Transfer) transferModel.getSource().get(transferTable.selectedRow());
+            final Transfer transfer = transferModel.getSource().get(transferTable.selectedRow().intValue());
             // Draw text fields at the bottom
             final String url = transfer.getRoot().toURL();
-            urlField.setAttributedStringValue(
-                    HyperlinkAttributedStringFactory.create(
-                            new NSMutableAttributedString(new NSAttributedString(url, TRUNCATE_MIDDLE_ATTRIBUTES)), url)
-            );
+            urlField.setStringValue(url);
             if(transfer.numberOfRoots() == 1) {
-                localField.setAttributedStringValue(new NSAttributedString(transfer.getRoot().getLocal().getAbsolute(),
+                localField.setAttributedStringValue(NSAttributedString.attributedStringWithAttributes(transfer.getRoot().getLocal().getAbsolute(),
                         TRUNCATE_MIDDLE_ATTRIBUTES));
             }
             else {
-                localField.setAttributedStringValue(new NSAttributedString(NSBundle.localizedString("Multiple files", ""),
+                localField.setAttributedStringValue(NSAttributedString.attributedStringWithAttributes(Locale.localizedString("Multiple files"),
                         TRUNCATE_MIDDLE_ATTRIBUTES));
             }
         }
@@ -448,18 +467,18 @@ public class CDTransferController extends CDWindowController implements NSToolba
      */
     private void updateIcon() {
         log.debug("updateIcon");
-        final int selected = transferTable.numberOfSelectedRows();
+        final int selected = transferTable.numberOfSelectedRows().intValue();
         if(1 != selected) {
             iconView.setImage(null);
             return;
         }
-        final Transfer transfer = transferModel.getSource().get(transferTable.selectedRow());
+        final Transfer transfer = transferModel.getSource().get(transferTable.selectedRow().intValue());
         // Draw file type icon
         if(transfer.numberOfRoots() == 1) {
             iconView.setImage(CDIconCache.instance().iconForPath(transfer.getRoot().getLocal(), 32));
         }
         else {
-            iconView.setImage(CDIconCache.instance().iconForName("multipleDocuments", 32));
+            iconView.setImage(CDIconCache.iconNamed("NSMultipleDocuments", 32));
         }
     }
 
@@ -468,12 +487,11 @@ public class CDTransferController extends CDWindowController implements NSToolba
      */
     private void updateBandwidthPopup() {
         log.debug("updateBandwidthPopup");
-        final int selected = transferTable.numberOfSelectedRows();
+        final int selected = transferTable.numberOfSelectedRows().intValue();
         bandwidthPopup.setEnabled(selected > 0);
-        NSEnumerator iterator = transferTable.selectedRowEnumerator();
-        while(iterator.hasMoreElements()) {
-            int i = ((Number) iterator.nextElement()).intValue();
-            final Transfer transfer = transferModel.getSource().get(i);
+        NSIndexSet iterator = transferTable.selectedRowIndexes();
+        for(NSUInteger index = iterator.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = iterator.indexGreaterThanIndex(index)) {
+            final Transfer transfer = transferModel.getSource().get(index.intValue());
             if(transfer instanceof SyncTransfer) {
                 // Currently we do not support bandwidth throtling for sync transfers due to
                 // the problem of mapping both download and upload rate in the GUI
@@ -483,17 +501,17 @@ public class CDTransferController extends CDWindowController implements NSToolba
             }
             if(transfer.getBandwidth() != BandwidthThrottle.UNLIMITED) {
                 // Mark as throttled
-                this.bandwidthPopup.itemAtIndex(0).setImage(NSImage.imageNamed("turtle.tiff"));
+                this.bandwidthPopup.itemAtIndex(0).setImage(CDIconCache.iconNamed("turtle.tiff"));
                 return;
             }
         }
         // Set the standard icon
-        this.bandwidthPopup.itemAtIndex(0).setImage(CDIconCache.instance().iconForName("bandwidth", 16));
+        this.bandwidthPopup.itemAtIndex(0).setImage(CDIconCache.iconNamed("bandwidth", 16));
     }
 
     private void reloadData() {
-        while(transferTable.subviews().count() > 0) {
-            ((NSView) transferTable.subviews().lastObject()).removeFromSuperviewWithoutNeedingDisplay();
+        while(transferTable.subviews().count().intValue() > 0) {
+            (Rococoa.cast(transferTable.subviews().lastObject(), NSView.class)).removeFromSuperviewWithoutNeedingDisplay();
         }
         transferTable.reloadData();
         this.updateHighlight();
@@ -518,8 +536,9 @@ public class CDTransferController extends CDWindowController implements NSToolba
         TransferCollection.instance().add(transfer);
         final int row = TransferCollection.instance().size() - 1;
         this.reloadData();
-        transferTable.selectRow(row, false);
-        transferTable.scrollRowToVisible(row);
+        final NSInteger index = new NSInteger(row);
+        transferTable.selectRowIndexes(NSIndexSet.indexSetWithIndex(index), false);
+        transferTable.scrollRowToVisible(index);
     }
 
     /**
@@ -541,26 +560,31 @@ public class CDTransferController extends CDWindowController implements NSToolba
         if(Preferences.instance().getBoolean("queue.orderFrontOnStart")) {
             this.window.makeKeyAndOrderFront(null);
         }
-        this.background(new RepeatableBackgroundAction(this) {
+        this.background(new AlertRepeatableBackgroundAction(this) {
             private boolean resume = resumeRequested;
             private boolean reload = reloadRequested;
 
             private TransferListener tl;
 
+            @Override
             public boolean prepare() {
                 transfer.addListener(tl = new TransferAdapter() {
+                    @Override
                     public void transferQueued() {
                         validateToolbar();
                     }
 
+                    @Override
                     public void transferResumed() {
                         validateToolbar();
                     }
 
+                    @Override
                     public void transferWillStart() {
                         validateToolbar();
                     }
 
+                    @Override
                     public void transferDidEnd() {
                         validateToolbar();
                     }
@@ -581,6 +605,7 @@ public class CDTransferController extends CDWindowController implements NSToolba
                 transfer.start(CDTransferPrompt.create(CDTransferController.this, transfer), options);
             }
 
+            @Override
             public void finish() {
                 super.finish();
                 if(transfer.getSession() instanceof ch.cyberduck.core.sftp.SFTPSession) {
@@ -588,8 +613,12 @@ public class CDTransferController extends CDWindowController implements NSToolba
                 }
                 transfer.getSession().setLoginController(null);
                 transfer.removeListener(tl);
+                // Upon retry, use resume
+                reload = false;
+                resume = true;
             }
 
+            @Override
             public void cleanup() {
                 if(transfer.isComplete() && !transfer.isCanceled()) {
                     if(transfer.isReset()) {
@@ -603,22 +632,22 @@ public class CDTransferController extends CDWindowController implements NSToolba
                         }
                     }
                 }
-                // Upon retry, use resume
-                reload = false;
-                resume = true;
                 TransferCollection.instance().save();
             }
 
+            @Override
             public Session getSession() {
                 return transfer.getSession();
             }
 
+            @Override
             public void pause() {
                 transfer.fireTransferQueued();
                 super.pause();
                 transfer.fireTransferResumed();
             }
 
+            @Override
             public boolean isCanceled() {
                 if((transfer.isRunning() || transfer.isQueued()) && transfer.isCanceled()) {
                     return true;
@@ -626,11 +655,12 @@ public class CDTransferController extends CDWindowController implements NSToolba
                 return super.isCanceled();
             }
 
+            @Override
             public void log(final boolean request, final String message) {
                 if(logDrawer.state() == NSDrawer.OpenState) {
-                    CDMainApplication.invoke(new WindowMainAction(CDTransferController.this) {
+                    invoke(new WindowMainAction(CDTransferController.this) {
                         public void run() {
-                            transcript.log(request, message);
+                            CDTransferController.this.transcript.log(request, message);
                         }
                     });
                 }
@@ -639,6 +669,7 @@ public class CDTransferController extends CDWindowController implements NSToolba
 
             private final Object lock = new Object();
 
+            @Override
             public Object lock() {
                 // No synchronization with other tasks
                 return lock;
@@ -647,7 +678,7 @@ public class CDTransferController extends CDWindowController implements NSToolba
     }
 
     private void validateToolbar() {
-        CDMainApplication.invoke(new WindowMainAction(CDTransferController.this) {
+        invoke(new WindowMainAction(CDTransferController.this) {
             public void run() {
                 window.toolbar().validateVisibleItems();
                 updateIcon();
@@ -666,92 +697,94 @@ public class CDTransferController extends CDWindowController implements NSToolba
     private static final String TOOLBAR_FILTER = "Search";
 
     /**
-     * NSToolbar.Delegate
-     *
-     * @param toolbar
-     * @param itemIdentifier
-     * @param flag
+     * Keep reference to weak toolbar items
      */
-    public NSToolbarItem toolbarItemForItemIdentifier(NSToolbar toolbar, String itemIdentifier, boolean flag) {
-        NSToolbarItem item = new NSToolbarItem(itemIdentifier);
+    private Map<String,NSToolbarItem> toolbarItems
+            = new HashMap<String,NSToolbarItem>();
+
+    public NSToolbarItem toolbar_itemForItemIdentifier_willBeInsertedIntoToolbar(NSToolbar toolbar, final String itemIdentifier, boolean flag) {
+        if(!toolbarItems.containsKey(itemIdentifier)) {
+            toolbarItems.put(itemIdentifier, NSToolbarItem.itemWithIdentifier(itemIdentifier));
+        }
+        final NSToolbarItem item = toolbarItems.get(itemIdentifier);
         if(itemIdentifier.equals(TOOLBAR_STOP)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_STOP, ""));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_STOP, ""));
-            item.setToolTip(NSBundle.localizedString(TOOLBAR_STOP, ""));
-            item.setImage(CDIconCache.instance().iconForName("stop", 32));
-            item.setTarget(this);
-            item.setAction(new NSSelector("stopButtonClicked", new Class[]{Object.class}));
+            item.setLabel(Locale.localizedString(TOOLBAR_STOP));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_STOP));
+            item.setToolTip(Locale.localizedString(TOOLBAR_STOP));
+            item.setImage(CDIconCache.iconNamed("stop", 32));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("stopButtonClicked:"));
             return item;
         }
         if(itemIdentifier.equals(TOOLBAR_RESUME)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_RESUME, ""));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_RESUME, ""));
-            item.setToolTip(NSBundle.localizedString(TOOLBAR_RESUME, ""));
-            item.setImage(NSImage.imageNamed("resume.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("resumeButtonClicked", new Class[]{Object.class}));
+            item.setLabel(Locale.localizedString(TOOLBAR_RESUME));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_RESUME));
+            item.setToolTip(Locale.localizedString(TOOLBAR_RESUME));
+            item.setImage(CDIconCache.iconNamed("resume.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("resumeButtonClicked:"));
             return item;
         }
         if(itemIdentifier.equals(TOOLBAR_RELOAD)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_RELOAD, ""));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_RELOAD, ""));
-            item.setToolTip(NSBundle.localizedString(TOOLBAR_RELOAD, ""));
-            item.setImage(NSImage.imageNamed("reload.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("reloadButtonClicked", new Class[]{Object.class}));
+            item.setLabel(Locale.localizedString(TOOLBAR_RELOAD));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_RELOAD));
+            item.setToolTip(Locale.localizedString(TOOLBAR_RELOAD));
+            item.setImage(CDIconCache.iconNamed("reload.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("reloadButtonClicked:"));
             return item;
         }
         if(itemIdentifier.equals(TOOLBAR_SHOW)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_SHOW, ""));
-            item.setPaletteLabel(NSBundle.localizedString("Show in Finder", ""));
-            item.setToolTip(NSBundle.localizedString("Show in Finder", ""));
-            item.setImage(NSImage.imageNamed("reveal.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("revealButtonClicked", new Class[]{Object.class}));
+            item.setLabel(Locale.localizedString(TOOLBAR_SHOW));
+            item.setPaletteLabel(Locale.localizedString("Show in Finder"));
+            item.setToolTip(Locale.localizedString("Show in Finder"));
+            item.setImage(CDIconCache.iconNamed("reveal.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("revealButtonClicked:"));
             return item;
         }
         if(itemIdentifier.equals(TOOLBAR_OPEN)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_OPEN, ""));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_OPEN, ""));
-            item.setToolTip(NSBundle.localizedString(TOOLBAR_OPEN, ""));
-            item.setImage(NSImage.imageNamed("open.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("openButtonClicked", new Class[]{Object.class}));
+            item.setLabel(Locale.localizedString(TOOLBAR_OPEN));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_OPEN));
+            item.setToolTip(Locale.localizedString(TOOLBAR_OPEN));
+            item.setImage(CDIconCache.iconNamed("open.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("openButtonClicked:"));
             return item;
         }
         if(itemIdentifier.equals(TOOLBAR_REMOVE)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_REMOVE, ""));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_REMOVE, ""));
-            item.setToolTip(NSBundle.localizedString(TOOLBAR_REMOVE, ""));
-            item.setImage(NSImage.imageNamed("clean.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("deleteButtonClicked", new Class[]{Object.class}));
+            item.setLabel(Locale.localizedString(TOOLBAR_REMOVE));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_REMOVE));
+            item.setToolTip(Locale.localizedString(TOOLBAR_REMOVE));
+            item.setImage(CDIconCache.iconNamed("clean.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("deleteButtonClicked:"));
             return item;
         }
         if(itemIdentifier.equals(TOOLBAR_CLEAN_UP)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_CLEAN_UP, ""));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_CLEAN_UP, ""));
-            item.setToolTip(NSBundle.localizedString(TOOLBAR_CLEAN_UP, ""));
-            item.setImage(NSImage.imageNamed("cleanAll.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("clearButtonClicked", new Class[]{Object.class}));
+            item.setLabel(Locale.localizedString(TOOLBAR_CLEAN_UP));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_CLEAN_UP));
+            item.setToolTip(Locale.localizedString(TOOLBAR_CLEAN_UP));
+            item.setImage(CDIconCache.iconNamed("cleanAll.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("clearButtonClicked:"));
             return item;
         }
         if(itemIdentifier.equals(TOOLBAR_TRASH)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_TRASH, ""));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_TRASH, ""));
-            item.setToolTip(NSBundle.localizedString("Move to Trash", ""));
-            item.setImage(NSImage.imageNamed("trash.tiff"));
-            item.setTarget(this);
-            item.setAction(new NSSelector("trashButtonClicked", new Class[]{Object.class}));
+            item.setLabel(Locale.localizedString(TOOLBAR_TRASH));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_TRASH));
+            item.setToolTip(Locale.localizedString("Move to Trash"));
+            item.setImage(CDIconCache.iconNamed("trash.tiff"));
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("trashButtonClicked:"));
             return item;
         }
         if(itemIdentifier.equals(TOOLBAR_FILTER)) {
-            item.setLabel(NSBundle.localizedString(TOOLBAR_FILTER, ""));
-            item.setPaletteLabel(NSBundle.localizedString(TOOLBAR_FILTER, ""));
+            item.setLabel(Locale.localizedString(TOOLBAR_FILTER));
+            item.setPaletteLabel(Locale.localizedString(TOOLBAR_FILTER));
             item.setView(this.filterField);
-            item.setMinSize(this.filterField.frame().size());
-            item.setMaxSize(this.filterField.frame().size());
+            item.setMinSize(this.filterField.frame().size);
+            item.setMaxSize(this.filterField.frame().size);
             return item;
         }
         // itemIdent refered to a toolbar item that is not provide or supported by us or cocoa.
@@ -759,106 +792,95 @@ public class CDTransferController extends CDWindowController implements NSToolba
         return null;
     }
 
-    public void paste(final Object sender) {
+    @Action
+    public void paste(final ID sender) {
         log.debug("paste");
-        NSPasteboard pboard = NSPasteboard.pasteboardWithName(CDPasteboards.TransferPasteboard);
-        if(pboard.availableTypeFromArray(new NSArray(CDPasteboards.TransferPasteboardType)) != null) {
-            Object o = pboard.propertyListForType(CDPasteboards.TransferPasteboardType);// get the data from paste board
-            if(o != null) {
-                NSArray elements = (NSArray) o;
-                for(int i = 0; i < elements.count(); i++) {
-                    NSDictionary dict = (NSDictionary) elements.objectAtIndex(i);
-                    TransferCollection.instance().add(TransferFactory.create(dict));
-                }
-                pboard.setPropertyListForType(null, CDPasteboards.TransferPasteboardType);
-                this.reloadData();
+        final Map<Host, PathPasteboard<NSDictionary>> boards = PathPasteboard.allPasteboards();
+        if(!boards.isEmpty()) {
+            for(PathPasteboard<NSDictionary> pasteboard : boards.values()) {
+                TransferCollection.instance().add(new DownloadTransfer(pasteboard.getFiles()));
             }
+            this.reloadData();
         }
+        boards.clear();
     }
 
-    public void stopButtonClicked(final Object sender) {
-        NSEnumerator iterator = transferTable.selectedRowEnumerator();
-        while(iterator.hasMoreElements()) {
-            int i = ((Number) iterator.nextElement()).intValue();
-            final Transfer transfer = transferModel.getSource().get(i);
+    @Action
+    public void stopButtonClicked(final ID sender) {
+        NSIndexSet iterator = transferTable.selectedRowIndexes();
+        for(NSUInteger index = iterator.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = iterator.indexGreaterThanIndex(index)) {
+            final Transfer transfer = transferModel.getSource().get(index.intValue());
             if(transfer.isRunning() || transfer.isQueued()) {
                 this.background(new AbstractBackgroundAction() {
                     public void run() {
                         transfer.cancel();
-                    }
-
-                    public void cleanup() {
-                        ;
                     }
                 });
             }
         }
     }
 
-    public void stopAllButtonClicked(final Object sender) {
+    @Action
+    public void stopAllButtonClicked(final ID sender) {
         final Collection<Transfer> transfers = transferModel.getSource();
-        for(int i = 0; i < transfers.size(); i++) {
-            final Transfer transfer = transfers.get(i);
+        for(final Transfer transfer : transfers) {
             if(transfer.isRunning() || transfer.isQueued()) {
                 this.background(new AbstractBackgroundAction() {
                     public void run() {
                         transfer.cancel();
-                    }
-
-                    public void cleanup() {
-                        ;
                     }
                 });
             }
         }
     }
 
-    public void resumeButtonClicked(final Object sender) {
-        NSEnumerator iterator = transferTable.selectedRowEnumerator();
-        while(iterator.hasMoreElements()) {
-            int i = ((Number) iterator.nextElement()).intValue();
+    @Action
+    public void resumeButtonClicked(final ID sender) {
+        NSIndexSet iterator = transferTable.selectedRowIndexes();
+        for(NSUInteger index = iterator.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = iterator.indexGreaterThanIndex(index)) {
             final Collection<Transfer> transfers = transferModel.getSource();
-            final Transfer transfer = transfers.get(i);
+            final Transfer transfer = transfers.get(index.intValue());
             if(!transfer.isRunning() && !transfer.isQueued()) {
                 this.startTransfer(transfer, true, false);
             }
         }
     }
 
-    public void reloadButtonClicked(final Object sender) {
-        NSEnumerator iterator = transferTable.selectedRowEnumerator();
-        while(iterator.hasMoreElements()) {
-            int i = ((Number) iterator.nextElement()).intValue();
+    @Action
+    public void reloadButtonClicked(final ID sender) {
+        NSIndexSet iterator = transferTable.selectedRowIndexes();
+        for(NSUInteger index = iterator.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = iterator.indexGreaterThanIndex(index)) {
             final Collection<Transfer> transfers = transferModel.getSource();
-            final Transfer transfer = transfers.get(i);
+            final Transfer transfer = transfers.get(index.intValue());
             if(!transfer.isRunning() && !transfer.isQueued()) {
                 this.startTransfer(transfer, false, true);
             }
         }
     }
 
-    public void openButtonClicked(final Object sender) {
-        if(transferTable.numberOfSelectedRows() == 1) {
-            final Transfer transfer = transferModel.getSource().get(transferTable.selectedRow());
+    @Action
+    public void openButtonClicked(final ID sender) {
+        if(transferTable.numberOfSelectedRows().intValue() == 1) {
+            final Transfer transfer = transferModel.getSource().get(transferTable.selectedRow().intValue());
             for(Path i : transfer.getRoots()) {
                 Local l = i.getLocal();
                 if(!NSWorkspace.sharedWorkspace().openFile(l.getAbsolute())) {
                     if(transfer.isComplete()) {
-                        this.alert(NSAlertPanel.criticalAlertPanel(NSBundle.localizedString("Could not open the file", ""), //title
-                                NSBundle.localizedString("Could not open the file", "") + " \""
+                        this.alert(NSAlert.alert(Locale.localizedString("Could not open the file"), //title
+                                Locale.localizedString("Could not open the file") + " \""
                                         + l.getName()
-                                        + "\". " + NSBundle.localizedString("It moved since you downloaded it.", ""), // message
-                                NSBundle.localizedString("OK", ""), // defaultbutton
+                                        + "\". " + Locale.localizedString("It moved since you downloaded it."), // message
+                                Locale.localizedString("OK"), // defaultbutton
                                 null, //alternative button
                                 null //other button
                         ));
                     }
                     else {
-                        this.alert(NSAlertPanel.criticalAlertPanel(NSBundle.localizedString("Could not open the file", ""), //title
-                                NSBundle.localizedString("Could not open the file", "") + " \""
+                        this.alert(NSAlert.alert(Locale.localizedString("Could not open the file"), //title
+                                Locale.localizedString("Could not open the file") + " \""
                                         + l.getName()
-                                        + "\". " + NSBundle.localizedString("The file has not yet been downloaded.", ""), // message
-                                NSBundle.localizedString("OK", ""), // defaultbutton
+                                        + "\". " + Locale.localizedString("The file has not yet been downloaded."), // message
+                                Locale.localizedString("OK"), // defaultbutton
                                 null, //alternative button
                                 null //other button
                         ));
@@ -868,30 +890,31 @@ public class CDTransferController extends CDWindowController implements NSToolba
         }
     }
 
-    public void revealButtonClicked(final Object sender) {
-        if(transferTable.numberOfSelectedRows() == 1) {
-            final Transfer transfer = transferModel.getSource().get(transferTable.selectedRow());
+    @Action
+    public void revealButtonClicked(final ID sender) {
+        if(transferTable.numberOfSelectedRows().intValue() == 1) {
+            final Transfer transfer = transferModel.getSource().get(transferTable.selectedRow().intValue());
             for(Path i : transfer.getRoots()) {
                 Local l = i.getLocal();
                 // If a second path argument is specified, a new file viewer is opened. If you specify an
                 // empty string (@"") for this parameter, the file is selected in the main viewer.
                 if(!NSWorkspace.sharedWorkspace().selectFile(l.getAbsolute(), l.getParent().getAbsolute())) {
                     if(transfer.isComplete()) {
-                        this.alert(NSAlertPanel.criticalAlertPanel(NSBundle.localizedString("Could not show the file in the Finder", ""), //title
-                                NSBundle.localizedString("Could not show the file", "") + " \""
+                        this.alert(NSAlert.alert(Locale.localizedString("Could not show the file in the Finder"), //title
+                                Locale.localizedString("Could not show the file") + " \""
                                         + l.getName()
-                                        + "\". " + NSBundle.localizedString("It moved since you downloaded it.", ""), // message
-                                NSBundle.localizedString("OK", ""), // defaultbutton
+                                        + "\". " + Locale.localizedString("It moved since you downloaded it."), // message
+                                Locale.localizedString("OK"), // defaultbutton
                                 null, //alternative button
                                 null //other button
                         ));
                     }
                     else {
-                        this.alert(NSAlertPanel.criticalAlertPanel(NSBundle.localizedString("Could not show the file in the Finder", ""), //title
-                                NSBundle.localizedString("Could not show the file", "") + " \""
+                        this.alert(NSAlert.alert(Locale.localizedString("Could not show the file in the Finder"), //title
+                                Locale.localizedString("Could not show the file") + " \""
                                         + l.getName()
-                                        + "\". " + NSBundle.localizedString("The file has not yet been downloaded.", ""), // message
-                                NSBundle.localizedString("OK", ""), // defaultbutton
+                                        + "\". " + Locale.localizedString("The file has not yet been downloaded."), // message
+                                Locale.localizedString("OK"), // defaultbutton
                                 null, //alternative button
                                 null //other button
                         ));
@@ -904,12 +927,12 @@ public class CDTransferController extends CDWindowController implements NSToolba
         }
     }
 
-    public void deleteButtonClicked(final Object sender) {
-        NSEnumerator iterator = transferTable.selectedRowEnumerator();
+    @Action
+    public void deleteButtonClicked(final ID sender) {
+        NSIndexSet iterator = transferTable.selectedRowIndexes();
         final Collection<Transfer> transfers = transferModel.getSource();
-        while(iterator.hasMoreElements()) {
-            int i = ((Number) iterator.nextElement()).intValue();
-            final Transfer transfer = transfers.get(i);
+        for(NSUInteger index = iterator.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = iterator.indexGreaterThanIndex(index)) {
+            final Transfer transfer = transfers.get(index.intValue());
             if(!transfer.isRunning() && !transfer.isQueued()) {
                 TransferCollection.instance().remove(transfer);
             }
@@ -918,10 +941,10 @@ public class CDTransferController extends CDWindowController implements NSToolba
         this.reloadData();
     }
 
-    public void clearButtonClicked(final Object sender) {
+    @Action
+    public void clearButtonClicked(final ID sender) {
         final Collection<Transfer> transfers = transferModel.getSource();
-        for(int i = 0; i < transfers.size(); i++) {
-            Transfer transfer = transfers.get(i);
+        for(Transfer transfer : transfers) {
             if(!transfer.isRunning() && !transfer.isQueued() && transfer.isComplete()) {
                 TransferCollection.instance().remove(transfer);
             }
@@ -930,12 +953,12 @@ public class CDTransferController extends CDWindowController implements NSToolba
         this.reloadData();
     }
 
-    public void trashButtonClicked(final Object sender) {
-        NSEnumerator iterator = transferTable.selectedRowEnumerator();
+    @Action
+    public void trashButtonClicked(final ID sender) {
+        NSIndexSet iterator = transferTable.selectedRowIndexes();
         final Collection<Transfer> transfers = transferModel.getSource();
-        while(iterator.hasMoreElements()) {
-            int i = ((Number) iterator.nextElement()).intValue();
-            final Transfer transfer = transfers.get(i);
+        for(NSUInteger index = iterator.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = iterator.indexGreaterThanIndex(index)) {
+            final Transfer transfer = transfers.get(index.intValue());
             if(!transfer.isRunning() && !transfer.isQueued()) {
                 for(Path path : transfer.getRoots()) {
                     path.getLocal().delete();
@@ -951,16 +974,16 @@ public class CDTransferController extends CDWindowController implements NSToolba
      * @param toolbar
      */
     public NSArray toolbarDefaultItemIdentifiers(NSToolbar toolbar) {
-        return new NSArray(new Object[]{
+        return NSArray.arrayWithObjects(
                 TOOLBAR_RESUME,
                 TOOLBAR_RELOAD,
                 TOOLBAR_STOP,
                 TOOLBAR_REMOVE,
-                NSToolbarItem.FlexibleSpaceItemIdentifier,
+                NSToolbarItem.NSToolbarFlexibleItemIdentifier,
                 TOOLBAR_OPEN,
                 TOOLBAR_SHOW,
                 TOOLBAR_FILTER
-        });
+        );
     }
 
     /**
@@ -969,7 +992,7 @@ public class CDTransferController extends CDWindowController implements NSToolba
      * @param toolbar
      */
     public NSArray toolbarAllowedItemIdentifiers(NSToolbar toolbar) {
-        return new NSArray(new Object[]{
+        return NSArray.arrayWithObjects(
                 TOOLBAR_RESUME,
                 TOOLBAR_RELOAD,
                 TOOLBAR_STOP,
@@ -979,85 +1002,77 @@ public class CDTransferController extends CDWindowController implements NSToolba
                 TOOLBAR_OPEN,
                 TOOLBAR_TRASH,
                 TOOLBAR_FILTER,
-                NSToolbarItem.CustomizeToolbarItemIdentifier,
-                NSToolbarItem.SpaceItemIdentifier,
-                NSToolbarItem.SeparatorItemIdentifier,
-                NSToolbarItem.FlexibleSpaceItemIdentifier
-        });
+                NSToolbarItem.NSToolbarCustomizeToolbarItemIdentifier,
+                NSToolbarItem.NSToolbarSpaceItemIdentifier,
+                NSToolbarItem.NSToolbarSeparatorItemIdentifier,
+                NSToolbarItem.NSToolbarFlexibleSpaceItemIdentifier
+        );
+    }
+
+    public NSArray toolbarSelectableItemIdentifiers(NSToolbar toolbar) {
+        return NSArray.array();
     }
 
     /**
      * @param item
      */
     public boolean validateMenuItem(NSMenuItem item) {
-        String identifier = item.action().name();
-        if(item.action().name().equals("paste:")) {
-            boolean valid = false;
-            NSPasteboard pboard = NSPasteboard.pasteboardWithName(CDPasteboards.TransferPasteboard);
-            if(pboard.availableTypeFromArray(new NSArray(CDPasteboards.TransferPasteboardType)) != null) {
-                Object o = pboard.propertyListForType(CDPasteboards.TransferPasteboardType);
-                if(o != null) {
-                    NSArray elements = (NSArray) o;
-                    for(int i = 0; i < elements.count(); i++) {
-                        NSDictionary dict = (NSDictionary) elements.objectAtIndex(i);
-                        final Transfer transfer = TransferFactory.create(dict);
-                        if(transfer.numberOfRoots() == 1) {
-                            item.setTitle(NSBundle.localizedString("Paste", "Menu item") + " \""
-                                    + transfer.getRoot().getName() + "\"");
-                        }
-                        else {
-                            item.setTitle(NSBundle.localizedString("Paste", "Menu item")
-                                    + " (" + transfer.numberOfRoots() + " " +
-                                    NSBundle.localizedString("files", "") + ")");
-                        }
-                        valid = true;
+        final Selector action = item.action();
+        if(action.equals(Foundation.selector("paste:"))) {
+            final Map<Host, PathPasteboard<NSDictionary>> boards = PathPasteboard.allPasteboards();
+            if(!boards.isEmpty() && boards.size() == 1) {
+                for(PathPasteboard<NSDictionary> pasteboard : boards.values()) {
+                    if(pasteboard.size() == 1) {
+                        item.setTitle(Locale.localizedString("Paste") + " \""
+                                + pasteboard.getFiles().get(0).getName() + "\"");
+                    }
+                    else {
+                        item.setTitle(Locale.localizedString("Paste")
+                                + " (" + pasteboard.size() + " " +
+                                Locale.localizedString("files") + ")");
                     }
                 }
             }
-            if(!valid) {
-                item.setTitle(NSBundle.localizedString("Paste", "Menu item"));
+            else {
+                item.setTitle(Locale.localizedString("Paste"));
             }
         }
-        return this.validateItem(identifier);
+        return this.validateItem(action);
     }
 
     /**
      * @param item
      */
-    public boolean validateToolbarItem(NSToolbarItem item) {
-        return this.validateItem(item.action().name());
+    public boolean validateToolbarItem(final NSToolbarItem item) {
+        return this.validateItem(item.action());
     }
 
     /**
      * Validates menu and toolbar items
      *
-     * @param identifier
+     * @param action
      * @return true if the item with the identifier should be selectable
      */
-    private boolean validateItem(String identifier) {
-        if(identifier.equals("paste:")) {
-            NSPasteboard pboard = NSPasteboard.pasteboardWithName(CDPasteboards.TransferPasteboard);
-            if(pboard.availableTypeFromArray(new NSArray(CDPasteboards.TransferPasteboardType)) != null) {
-                return pboard.propertyListForType(CDPasteboards.TransferPasteboardType) != null;
-            }
-            return false;
+    private boolean validateItem(final Selector action) {
+        if(action.equals(Foundation.selector("paste:"))) {
+            return !PathPasteboard.allPasteboards().isEmpty();
         }
-        if(identifier.equals("stopButtonClicked:")) {
+        if(action.equals(Foundation.selector("stopButtonClicked:"))) {
             return this.validate(new TransferToolbarValidator() {
                 public boolean validate(Transfer transfer) {
                     return transfer.isRunning() || transfer.isQueued();
                 }
             });
         }
-        if(identifier.equals("reloadButtonClicked:")
-                || identifier.equals("deleteButtonClicked:")) {
+        if(action.equals(Foundation.selector("reloadButtonClicked:"))
+                || action.equals(Foundation.selector("deleteButtonClicked:"))) {
             return this.validate(new TransferToolbarValidator() {
                 public boolean validate(Transfer transfer) {
                     return !transfer.isRunning() && !transfer.isQueued();
                 }
             });
         }
-        if(identifier.equals("resumeButtonClicked:")) {
+        if(action.equals(Foundation.selector("resumeButtonClicked:"))) {
             return this.validate(new TransferToolbarValidator() {
                 public boolean validate(Transfer transfer) {
                     if(transfer.isRunning() || transfer.isQueued()) {
@@ -1067,8 +1082,8 @@ public class CDTransferController extends CDWindowController implements NSToolba
                 }
             });
         }
-        if(identifier.equals("openButtonClicked:")
-                || identifier.equals("trashButtonClicked:")) {
+        if(action.equals(Foundation.selector("openButtonClicked:"))
+                || action.equals(Foundation.selector("trashButtonClicked:"))) {
             return this.validate(new TransferToolbarValidator() {
                 public boolean validate(Transfer transfer) {
                     if(!transfer.isRunning()) {
@@ -1082,7 +1097,7 @@ public class CDTransferController extends CDWindowController implements NSToolba
                 }
             });
         }
-        if(identifier.equals("revealButtonClicked:")) {
+        if(action.equals(Foundation.selector("revealButtonClicked:"))) {
             return this.validate(new TransferToolbarValidator() {
                 public boolean validate(Transfer transfer) {
                     for(Path i : transfer.getRoots()) {
@@ -1094,8 +1109,8 @@ public class CDTransferController extends CDWindowController implements NSToolba
                 }
             });
         }
-        if(identifier.equals("clearButtonClicked:")) {
-            return transferTable.numberOfRows() > 0;
+        if(action.equals(Foundation.selector("clearButtonClicked:"))) {
+            return transferTable.numberOfRows().intValue() > 0;
         }
         return true;
     }
@@ -1107,11 +1122,10 @@ public class CDTransferController extends CDWindowController implements NSToolba
      * @return True if one or more of the selected items passes the validation test
      */
     private boolean validate(TransferToolbarValidator v) {
-        final NSEnumerator iterator = transferTable.selectedRowEnumerator();
+        final NSIndexSet iterator = transferTable.selectedRowIndexes();
         final Collection<Transfer> transfers = transferModel.getSource();
-        while(iterator.hasMoreElements()) {
-            int i = ((Number) iterator.nextElement()).intValue();
-            final Transfer transfer = transfers.get(i);
+        for(NSUInteger index = iterator.firstIndex(); !index.equals(NSIndexSet.NSNotFound); index = iterator.indexGreaterThanIndex(index)) {
+            final Transfer transfer = transfers.get(index.intValue());
             if(v.validate(transfer)) {
                 return true;
             }

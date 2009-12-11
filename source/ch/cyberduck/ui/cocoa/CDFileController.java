@@ -18,15 +18,18 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSButton;
-import com.apple.cocoa.application.NSTextField;
-
 import ch.cyberduck.core.Path;
 import ch.cyberduck.core.PathFactory;
+import ch.cyberduck.ui.cocoa.application.NSButton;
+import ch.cyberduck.ui.cocoa.application.NSImageView;
+import ch.cyberduck.ui.cocoa.application.NSTextField;
+import ch.cyberduck.ui.cocoa.foundation.NSRange;
 import ch.cyberduck.ui.cocoa.odb.EditorFactory;
 
-import org.apache.log4j.Logger;
+import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang.StringUtils;
+import org.apache.log4j.Logger;
+import org.rococoa.cocoa.foundation.NSUInteger;
 
 /**
  * @version $Id$
@@ -34,13 +37,22 @@ import org.apache.commons.lang.StringUtils;
 public abstract class CDFileController extends CDSheetController {
     protected static Logger log = Logger.getLogger(CDFileController.class);
 
-    protected NSTextField filenameField; //IBOutlet
+    @Outlet
+    protected NSImageView iconView;
+
+    public void setIconView(NSImageView iconView) {
+        this.iconView = iconView;
+    }
+
+    @Outlet
+    protected NSTextField filenameField;
 
     public void setFilenameField(NSTextField filenameField) {
         this.filenameField = filenameField;
     }
 
-    private NSButton editButton; //IBOutlet
+    @Outlet
+    private NSButton editButton;
 
     public void setEditButton(NSButton editButton) {
         this.editButton = editButton;
@@ -51,22 +63,29 @@ public abstract class CDFileController extends CDSheetController {
         super(parent);
     }
 
+    @Override
+    public void awakeFromNib() {
+        super.awakeFromNib();
+        filenameField.selectText(null);
+        this.window().fieldEditor_forObject(true, filenameField).setSelectedRange(NSRange.NSMakeRange(
+                new NSUInteger(0), new NSUInteger(FilenameUtils.getBaseName(filenameField.stringValue()).length())
+        ));
+    }
+
     /**
      * @return The current working directory or selected folder
      */
     protected Path getWorkdir() {
         if(((CDBrowserController) parent).getSelectionCount() == 1) {
             final Path selected = ((CDBrowserController) parent).getSelectedPath();
-            if(selected.attributes.isDirectory()) {
-                return selected;
-            }
-            return (Path) selected.getParent();
+            return selected.getParent();
         }
         return ((CDBrowserController) parent).workdir();
     }
 
+    @Override
     protected boolean validateInput() {
-        if (filenameField.stringValue().indexOf('/') != -1) {
+        if(filenameField.stringValue().indexOf('/') != -1) {
             return false;
         }
         if(StringUtils.isNotBlank(filenameField.stringValue())) {

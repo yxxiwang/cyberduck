@@ -18,24 +18,25 @@ package ch.cyberduck.ui.cocoa.delegate;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSCell;
-import com.apple.cocoa.application.NSMenu;
-import com.apple.cocoa.application.NSMenuItem;
-import com.apple.cocoa.application.NSWorkspace;
-import com.apple.cocoa.foundation.NSSelector;
-
 import ch.cyberduck.core.Local;
+import ch.cyberduck.core.LocalFactory;
 import ch.cyberduck.core.Path;
 import ch.cyberduck.ui.cocoa.CDIconCache;
+import ch.cyberduck.ui.cocoa.application.NSCell;
+import ch.cyberduck.ui.cocoa.application.NSMenu;
+import ch.cyberduck.ui.cocoa.application.NSMenuItem;
+import ch.cyberduck.ui.cocoa.application.NSWorkspace;
 
 import org.apache.log4j.Logger;
+import org.rococoa.Foundation;
+import org.rococoa.cocoa.foundation.NSInteger;
 
 import java.util.List;
 
 /**
  * @version $Id$
  */
-public class TransferMenuDelegate extends MenuDelegate {
+public class TransferMenuDelegate extends AbstractMenuDelegate {
     private static Logger log = Logger.getLogger(TransferMenuDelegate.class);
 
     /**
@@ -43,33 +44,41 @@ public class TransferMenuDelegate extends MenuDelegate {
      */
     private List<Path> roots;
 
-    public TransferMenuDelegate(List roots) {
+    public TransferMenuDelegate(List<Path> roots) {
         this.roots = roots;
     }
 
-    public int numberOfItemsInMenu(NSMenu menu) {
-        return roots.size();
+    public NSInteger numberOfItemsInMenu(NSMenu menu) {
+        return new NSInteger(roots.size());
     }
 
-    public boolean menuUpdateItemAtIndex(NSMenu menu, NSMenuItem item, int index, boolean shouldCancel) {
-        Path path = roots.get(index);
+    @Override
+    public boolean menuUpdateItemAtIndex(NSMenu menu, NSMenuItem item, NSInteger index, boolean shouldCancel) {
+        if(shouldCancel) {
+            return false;
+        }
+        if(super.shouldSkipValidation(menu, index.intValue())) {
+            return false;
+        }
+        final Path path = roots.get(index.intValue());
         item.setTitle(path.getName());
         if(path.getLocal().exists()) {
             item.setEnabled(true);
-            item.setTarget(this);
-            item.setAction(new NSSelector("reveal", new Class[]{NSMenuItem.class}));
-        } else {
+            item.setTarget(this.id());
+            item.setAction(Foundation.selector("reveal:"));
+        }
+        else {
             item.setEnabled(false);
             item.setTarget(null);
         }
-        item.setState(path.getLocal().exists() ? NSCell.OnState : NSCell.OffState);
-        item.setRepresentedObject(path);
+        item.setState(path.getLocal().exists() ? NSCell.NSOnState : NSCell.NSOffState);
+        item.setRepresentedObject(path.getLocal().getAbsolute());
         item.setImage(CDIconCache.instance().iconForPath(path, 16));
         return !shouldCancel;
     }
 
     public void reveal(final NSMenuItem sender) {
-        Local l = ((Path) sender.representedObject()).getLocal();
+        Local l = LocalFactory.createLocal(sender.representedObject());
         // If a second path argument is specified, a new file viewer is opened. If you specify an
         // empty string (@"") for this parameter, the file is selected in the main viewer.
         if(!NSWorkspace.sharedWorkspace().selectFile(l.getAbsolute(), l.getParent().getAbsolute())) {

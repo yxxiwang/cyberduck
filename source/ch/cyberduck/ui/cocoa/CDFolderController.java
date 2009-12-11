@@ -18,10 +18,10 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSImageView;
-import com.apple.cocoa.foundation.NSBundle;
-
 import ch.cyberduck.core.*;
+import ch.cyberduck.core.i18n.Locale;
+import ch.cyberduck.ui.cocoa.application.NSImageView;
+import ch.cyberduck.ui.cocoa.threading.BrowserBackgroundAction;
 
 import org.apache.log4j.Logger;
 
@@ -34,17 +34,17 @@ import java.util.Collections;
 public class CDFolderController extends CDFileController {
     private static Logger log = Logger.getLogger(CDFolderController.class);
 
-    protected NSImageView iconView; //IBOutlet
-
-    public void setIconView(NSImageView iconView) {
-        this.iconView = iconView;
-        this.iconView.setImage(CDIconCache.instance().iconForName("newfolder.icns", 128));
-    }
-
     public CDFolderController(final CDWindowController parent) {
         super(parent);
     }
 
+    @Override
+    public void setIconView(NSImageView iconView) {
+        iconView.setImage(CDIconCache.iconNamed("newfolder.icns", 128));
+        super.setIconView(iconView);
+    }
+
+    @Override
     protected String getBundleName() {
         return "Folder";
     }
@@ -56,7 +56,7 @@ public class CDFolderController extends CDFileController {
     }
 
     protected void createFolder(final Path workdir, final String filename) {
-        final CDBrowserController c = (CDBrowserController)parent;
+        final CDBrowserController c = (CDBrowserController) parent;
         c.background(new BrowserBackgroundAction(c) {
             final Path folder
                     = PathFactory.createPath(workdir.getSession(), workdir.getAbsolute(),
@@ -70,15 +70,17 @@ public class CDFolderController extends CDFileController {
                                 false);
                     }
                 }
-                folder.cache().put(folder, new AttributedList<Path>());
+                folder.cache().put(folder, AttributedList.<Path>emptyList());
                 folder.getParent().invalidate();
             }
 
+            @Override
             public String getActivity() {
-                return MessageFormat.format(NSBundle.localizedString("Making directory {0}", "Status", ""),
+                return MessageFormat.format(Locale.localizedString("Making directory {0}", "Status"),
                         folder.getName());
             }
 
+            @Override
             public void cleanup() {
                 if(filename.charAt(0) == '.') {
                     c.setShowHiddenFiles(true);

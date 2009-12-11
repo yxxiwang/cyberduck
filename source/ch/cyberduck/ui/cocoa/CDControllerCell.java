@@ -18,31 +18,30 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSView;
-import com.apple.cocoa.application.NSCell;
-import com.apple.cocoa.foundation.NSRect;
+import ch.cyberduck.ui.cocoa.application.NSCell;
+import ch.cyberduck.ui.cocoa.application.NSView;
+
+import org.rococoa.ObjCClass;
 
 /**
  * @version $Id$
  */
-public class CDControllerCell extends NSCell {
+public abstract class CDControllerCell extends NSCell {
+    private static final _Class CLASS = org.rococoa.Rococoa.createClass("CDControllerCell", _Class.class);
 
-    public CDControllerCell() {
-        super();
+    public static CDControllerCell controllerCell() {
+        return CLASS.alloc().init();
     }
 
-    private CDBundleController controller;
-
-    public void setObjectValue(Object c) {
-        this.controller = (CDBundleController) c;
+    public interface _Class extends ObjCClass {
+        CDControllerCell alloc();
     }
 
-    public void drawInteriorWithFrameInView(NSRect cellFrame, NSView controlView) {
-        if (this.controller != null) {
-            this.controller.view().setFrame(cellFrame);
-            if (this.controller.view().superview() != controlView) {
-                controlView.addSubview(this.controller.view());
-            }
-        }
-    }
+    public abstract CDControllerCell init();
+
+    /**
+     *
+     * @param aImage
+     */
+    public abstract void setView(NSView aImage);
 }

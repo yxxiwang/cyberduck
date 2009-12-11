@@ -18,10 +18,8 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-
-import ch.cyberduck.ui.cocoa.threading.BackgroundException;
-
+import ch.cyberduck.core.i18n.Locale;
+import ch.cyberduck.core.threading.BackgroundException;
 import org.apache.commons.lang.StringUtils;
 import org.apache.log4j.Logger;
 
@@ -67,7 +65,7 @@ public abstract class Session {
         }
     }
 
-    private final String ua = NSBundle.mainBundle().objectForInfoDictionaryKey("CFBundleName") + "/"
+    private final String ua = Preferences.instance().getProperty("application") + "/"
             + Preferences.instance().getProperty("version");
 
     public String getUserAgent() {
@@ -130,7 +128,7 @@ public abstract class Session {
         }
         catch(IOException e) {
             this.interrupt();
-            this.error(null, "Connection failed", e);
+            this.error("Connection failed", e);
             throw e;
         }
     }
@@ -176,7 +174,7 @@ public abstract class Session {
         login.check(host);
 
         final Credentials credentials = host.getCredentials();
-        this.message(MessageFormat.format(NSBundle.localizedString("Authenticating as {0}", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("Authenticating as {0}", "Status"),
                 credentials.getUsername()));
         this.login(credentials);
 
@@ -197,8 +195,10 @@ public abstract class Session {
     protected abstract void login(Credentials credentials) throws IOException;
 
     /**
+     * Mount the default path of the configured host or the home directory as returned by the server
+     * when not given.
      *
-     * @return
+     * @return Null if mount fails. Check the error listener for details.
      */
     public Path mount() {
         try {
@@ -220,7 +220,7 @@ public abstract class Session {
      * @return null if we fail, the mounted working directory if we succeed
      */
     protected Path mount(String directory) throws IOException {
-        this.message(MessageFormat.format(NSBundle.localizedString("Mounting {0}", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("Mounting {0}", "Status"),
                 host.getHostname()));
         this.check();
         if(!this.isConnected()) {
@@ -295,7 +295,27 @@ public abstract class Session {
      * @return The current working directory (pwd) or null if it cannot be retrieved for whatever reason
      * @throws ConnectionCanceledException If the underlying connection has already been closed before
      */
-    public abstract Path workdir() throws IOException;
+    public Path workdir() throws IOException {
+        if(!this.isConnected()) {
+            throw new ConnectionCanceledException();
+        }
+        if(null == workdir) {
+            workdir = PathFactory.createPath(this, Path.DELIMITER, Path.VOLUME_TYPE | Path.DIRECTORY_TYPE);
+        }
+        return workdir;
+    }
+
+    /**
+     *
+     * @param workdir
+     * @throws IOException
+     */
+    public void setWorkdir(Path workdir) throws IOException {
+        if(!this.isConnected()) {
+            throw new ConnectionCanceledException();
+        }
+        this.workdir = workdir;
+    }
 
     /**
      * Send a 'no operation' command
@@ -351,7 +371,7 @@ public abstract class Session {
             }
         }
         catch(IOException e) {
-            this.error(null, "Cannot create archive", e);
+            this.error("Cannot create archive", e);
         }
     }
 
@@ -377,7 +397,7 @@ public abstract class Session {
             file.getParent().invalidate();
         }
         catch(IOException e) {
-            this.error(null, "Cannot expand archive", e);
+            this.error("Cannot expand archive", e);
         }
     }
 
@@ -395,15 +415,15 @@ public abstract class Session {
         return resolver != null;
     }
 
-    private Set<ConnectionListener> listeners
+    private Set<ConnectionListener> connectionListeners
             = Collections.synchronizedSet(new HashSet<ConnectionListener>());
 
     public void addConnectionListener(ConnectionListener listener) {
-        listeners.add(listener);
+        connectionListeners.add(listener);
     }
 
     public void removeConnectionListener(ConnectionListener listener) {
-        listeners.remove(listener);
+        connectionListeners.remove(listener);
     }
 
     /**
@@ -415,14 +435,16 @@ public abstract class Session {
      */
     protected void fireConnectionWillOpenEvent() throws ResolveCanceledException, UnknownHostException {
         log.debug("connectionWillOpen");
-        ConnectionListener[] l = listeners.toArray(new ConnectionListener[listeners.size()]);
-        for(int i = 0; i < l.length; i++) {
-            l[i].connectionWillOpen();
+        ConnectionListener[] l = connectionListeners.toArray(new ConnectionListener[connectionListeners.size()]);
+        for(ConnectionListener listener : l) {
+            listener.connectionWillOpen();
         }
+
         // Configuring proxy if any
-        Proxy.configure(this.host.getHostname());
+        ProxyFactory.instance().configure(host);
+
         this.resolver = new Resolver(this.host.getHostname(true));
-        this.message(MessageFormat.format(NSBundle.localizedString("Resolving {0}", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("Resolving {0}", "Status"),
                 host.getHostname()));
 
         // Try to resolve the hostname first
@@ -440,9 +462,8 @@ public abstract class Session {
         log.debug("connectionDidOpen");
         this.resolver = null;
 
-        ConnectionListener[] l = listeners.toArray(new ConnectionListener[listeners.size()]);
-        for(int i = 0; i < l.length; i++) {
-            l[i].connectionDidOpen();
+        for(ConnectionListener listener : connectionListeners.toArray(new ConnectionListener[connectionListeners.size()])) {
+            listener.connectionDidOpen();
         }
     }
 
@@ -453,11 +474,11 @@ public abstract class Session {
      */
     protected void fireConnectionWillCloseEvent() {
         log.debug("connectionWillClose");
-        this.message(MessageFormat.format(NSBundle.localizedString("Disconnecting {0}", "Status", ""),
+        this.message(MessageFormat.format(Locale.localizedString("Disconnecting {0}", "Status"),
                 this.getHost().getHostname()));
-        ConnectionListener[] l = listeners.toArray(new ConnectionListener[listeners.size()]);
-        for(int i = 0; i < l.length; i++) {
-            l[i].connectionWillClose();
+
+        for(ConnectionListener listener : connectionListeners.toArray(new ConnectionListener[connectionListeners.size()])) {
+            listener.connectionWillClose();
         }
     }
 
@@ -472,9 +493,8 @@ public abstract class Session {
         this.resolver = null;
         this.workdir = null;
 
-        ConnectionListener[] l = listeners.toArray(new ConnectionListener[listeners.size()]);
-        for(int i = 0; i < l.length; i++) {
-            l[i].connectionDidClose();
+        for(ConnectionListener listener : connectionListeners.toArray(new ConnectionListener[connectionListeners.size()])) {
+            listener.connectionDidClose();
         }
     }
 
@@ -521,7 +541,7 @@ public abstract class Session {
      */
     public void message(final String message) {
         log.info(message);
-        for(ProgressListener listener : progressListeners) {
+        for(ProgressListener listener : progressListeners.toArray(new ProgressListener[progressListeners.size()])) {
             listener.message(message);
         }
     }
@@ -537,6 +557,10 @@ public abstract class Session {
         errorListeners.remove(listener);
     }
 
+    public void error(String message, Throwable e) {
+        this.error(null, message, e);
+    }
+
     /**
      * Notifies all error listeners of this error without sending this error to Growl
      *
@@ -547,7 +571,7 @@ public abstract class Session {
     public void error(Path path, String message, Throwable e) {
         final BackgroundException failure = new BackgroundException(this, path, message, e);
         this.message(failure.getMessage());
-        for(ErrorListener listener : errorListeners) {
+        for(ErrorListener listener : errorListeners.toArray(new ErrorListener[errorListeners.size()])) {
             listener.error(failure);
         }
     }
@@ -555,12 +579,19 @@ public abstract class Session {
     /**
      * Caching files listings of previously visited directories
      */
-    private Cache<Path> cache = new Cache<Path>();
+    private Cache<Path> cache;
 
     /**
      * @return The directory listing cache
      */
     public Cache<Path> cache() {
+        if(null == cache) {
+            cache = new Cache<Path>() {
+                public String toString() {
+                    return "Cache for " + Session.this.toString();
+                }
+            };
+        }
         return this.cache;
     }
 
@@ -568,6 +599,7 @@ public abstract class Session {
      * @param other
      * @return true if the other session denotes the same hostname and protocol
      */
+    @Override
     public boolean equals(Object other) {
         if(null == other) {
             return false;
@@ -579,8 +611,7 @@ public abstract class Session {
         return false;
     }
 
-    protected void finalize() throws java.lang.Throwable {
-        log.debug("finalize:" + super.toString());
-        super.finalize();
+    public String toString() {
+        return "Session " + host.toURL();
     }
 }

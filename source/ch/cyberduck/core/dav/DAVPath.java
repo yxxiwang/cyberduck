@@ -18,14 +18,13 @@ package ch.cyberduck.core.dav;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.foundation.NSBundle;
-import com.apple.cocoa.foundation.NSDictionary;
-
 import ch.cyberduck.core.*;
+import ch.cyberduck.core.i18n.Locale;
 import ch.cyberduck.core.io.BandwidthThrottle;
 import ch.cyberduck.core.io.IOResumeException;
 
 import org.apache.commons.httpclient.methods.InputStreamRequestEntity;
+import org.apache.commons.io.IOUtils;
 import org.apache.log4j.Logger;
 import org.apache.webdav.lib.WebdavResource;
 import org.apache.webdav.lib.methods.DepthSupport;
@@ -45,21 +44,25 @@ public class DAVPath extends Path {
         PathFactory.addFactory(Protocol.WEBDAV, new Factory());
     }
 
-    private static class Factory extends PathFactory {
-        protected Path create(Session session, String path, int type) {
-            return new DAVPath((DAVSession) session, path, type);
+    private static class Factory extends PathFactory<DAVSession> {
+        @Override
+        protected Path create(DAVSession session, String path, int type) {
+            return new DAVPath(session, path, type);
         }
 
-        protected Path create(Session session, String parent, String name, int type) {
-            return new DAVPath((DAVSession) session, parent, name, type);
+        @Override
+        protected Path create(DAVSession session, String parent, String name, int type) {
+            return new DAVPath(session, parent, name, type);
         }
 
-        protected Path create(Session session, String path, Local file) {
-            return new DAVPath((DAVSession) session, path, file);
+        @Override
+        protected Path create(DAVSession session, String path, Local file) {
+            return new DAVPath(session, path, file);
         }
 
-        protected Path create(Session session, NSDictionary dict) {
-            return new DAVPath((DAVSession) session, dict);
+        @Override
+        protected <T> Path create(DAVSession session, T dict) {
+            return new DAVPath(session, dict);
         }
     }
 
@@ -80,19 +83,21 @@ public class DAVPath extends Path {
         this.session = s;
     }
 
-    protected DAVPath(DAVSession s, NSDictionary dict) {
+    protected <T> DAVPath(DAVSession s, T dict) {
         super(dict);
         this.session = s;
     }
 
+    @Override
     public Session getSession() {
         return this.session;
     }
 
+    @Override
     public void readSize() {
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Getting size of {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Getting size of {0}", "Status"),
                     this.getName()));
 
             session.DAV.setPath(this.attributes.isDirectory() ?
@@ -106,10 +111,11 @@ public class DAVPath extends Path {
         }
     }
 
+    @Override
     public void readTimestamp() {
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Getting timestamp of {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Getting timestamp of {0}", "Status"),
                     this.getName()));
 
             session.DAV.setPath(this.attributes.isDirectory() ?
@@ -124,15 +130,17 @@ public class DAVPath extends Path {
     }
 
 
+    @Override
     public void readPermission() {
         ;
     }
 
+    @Override
     public void delete() {
         log.debug("delete:" + this.toString());
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Deleting {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Deleting {0}", "Status"),
                     this.getName()));
 
             if(!session.DAV.deleteMethod(this.getAbsolute())) {
@@ -150,19 +158,19 @@ public class DAVPath extends Path {
     }
 
 
+    @Override
     public AttributedList<Path> list() {
         final AttributedList<Path> childs = new AttributedList<Path>();
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Listing directory {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Listing directory {0}", "Status"),
                     this.getName()));
 
             session.setWorkdir(this);
             session.DAV.setContentType("text/xml");
             WebdavResource[] resources = session.DAV.listWebdavResources();
 
-            for(int i = 0; i < resources.length; i++) {
-                final WebdavResource resource = resources[i];
+            for(final WebdavResource resource : resources) {
                 boolean collection = false;
                 if(null != resource.getResourceType()) {
                     collection = resource.getResourceType().isCollection();
@@ -190,7 +198,7 @@ public class DAVPath extends Path {
         return childs;
     }
 
-
+    @Override
     public void mkdir(boolean recursive) {
         log.debug("mkdir:" + this.getName());
         try {
@@ -200,7 +208,7 @@ public class DAVPath extends Path {
                 }
             }
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Making directory {0}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Making directory {0}", "Status"),
                     this.getName()));
 
             session.DAV.setContentType("text/xml");
@@ -214,11 +222,17 @@ public class DAVPath extends Path {
 
     }
 
+    @Override
+    public boolean isWritePermissionsSupported() {
+        return false;
+    }
+
+    @Override
     public void writePermissions(Permission perm, boolean recursive) {
 //            log.debug("changePermissions:" + perm);
 //            try {
 //                session.check();
-//                session.message(NSBundle.localizedString("Changing permission of {0} to {1}", "Status", "") + " " + perm.getOctalString() + " (" + this.getName() + ")");
+//                session.message(Locale.localizedString("Changing permission of {0} to {1}", "Status", "") + " " + perm.getOctalString() + " (" + this.getName() + ")");
 //                session.DAV.aclMethod(this.getAbsolute(), new Ace[]{});
 //            }
 //            catch(IOException e) {
@@ -226,11 +240,12 @@ public class DAVPath extends Path {
 //            }
     }
 
+    @Override
     public void rename(AbstractPath renamed) {
         log.debug("rename:" + renamed);
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Renaming {0} to {1}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Renaming {0} to {1}", "Status"),
                     this.getName(), renamed.getName()));
 
             if(!session.DAV.moveMethod(this.getAbsolute(), renamed.getAbsolute())) {
@@ -248,10 +263,11 @@ public class DAVPath extends Path {
         }
     }
 
+    @Override
     public void copy(AbstractPath copy) {
         try {
             session.check();
-            session.message(MessageFormat.format(NSBundle.localizedString("Copying {0} to {1}", "Status", ""),
+            session.message(MessageFormat.format(Locale.localizedString("Copying {0} to {1}", "Status"),
                     this.getName(), copy));
 
             if(!session.DAV.copyMethod(this.getAbsolute(), copy.getAbsolute())) {
@@ -268,6 +284,7 @@ public class DAVPath extends Path {
         }
     }
 
+    @Override
     public void download(final BandwidthThrottle throttle, final StreamListener listener, final boolean check) {
         if(attributes.isFile()) {
             OutputStream out = null;
@@ -295,17 +312,8 @@ public class DAVPath extends Path {
                 this.error("Download failed", e);
             }
             finally {
-                try {
-                    if(in != null) {
-                        in.close();
-                    }
-                    if(out != null) {
-                        out.close();
-                    }
-                }
-                catch(IOException e) {
-                    log.error(e.getMessage());
-                }
+                IOUtils.closeQuietly(in);
+                IOUtils.closeQuietly(out);
             }
         }
         if(attributes.isDirectory()) {
@@ -314,13 +322,14 @@ public class DAVPath extends Path {
 
     }
 
+    @Override
     public void upload(final BandwidthThrottle throttle, final StreamListener listener, final Permission p, final boolean check) {
         try {
             if(check) {
                 session.check();
             }
             if(attributes.isFile()) {
-                this.getSession().message(MessageFormat.format(NSBundle.localizedString("Uploading {0}", "Status", ""),
+                this.getSession().message(MessageFormat.format(Locale.localizedString("Uploading {0}", "Status"),
                         this.getName()));
 
                 final InputStream in = new Local.InputStream(this.getLocal());
@@ -342,6 +351,7 @@ public class DAVPath extends Path {
                             new InputStreamRequestEntity(in, this.getLocal().attributes.getSize() - stat.getCurrent(), this.getLocal().getMimeType()) {
                                 boolean requested = false;
 
+                                @Override
                                 public void writeRequest(OutputStream out) throws IOException {
                                     if(requested) {
                                         in.reset();
@@ -356,6 +366,7 @@ public class DAVPath extends Path {
                                     }
                                 }
 
+                                @Override
                                 public boolean isRepeatable() {
                                     return true;
                                 }
@@ -365,14 +376,7 @@ public class DAVPath extends Path {
                     }
                 }
                 finally {
-                    try {
-                        if(in != null) {
-                            in.close();
-                        }
-                    }
-                    catch(IOException e) {
-                        log.error(e.getMessage());
-                    }
+                    IOUtils.closeQuietly(in);
                 }
             }
             if(attributes.isDirectory()) {
@@ -384,6 +388,7 @@ public class DAVPath extends Path {
         }
     }
 
+    @Override
     public String toHttpURL() {
         return this.toURL();
     }

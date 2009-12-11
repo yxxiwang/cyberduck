@@ -18,14 +18,14 @@ package ch.cyberduck.core;
  *  dkocher@cyberduck.ch
  */
 
+import ch.cyberduck.core.serializer.HostReaderFactory;
+import ch.cyberduck.core.serializer.HostWriterFactory;
+import ch.cyberduck.core.serializer.Reader;
+
 import org.apache.log4j.Logger;
 
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.Iterator;
-import java.io.IOException;
-
-import com.apple.cocoa.application.NSImage;
 
 /**
  * @version $Id$
@@ -34,11 +34,10 @@ public class HistoryCollection extends HostCollection {
     private static Logger log = Logger.getLogger(HistoryCollection.class);
 
     private static HistoryCollection HISTORY_COLLECTION = new HistoryCollection(
-            new Local(Preferences.instance().getProperty("application.support.path"), "History")
+            LocalFactory.createLocal(Preferences.instance().getProperty("application.support.path"), "History")
     );
 
     /**
-     *
      * @return
      */
     public static HistoryCollection defaultCollection() {
@@ -55,15 +54,17 @@ public class HistoryCollection extends HostCollection {
         folder.mkdir(true);
     }
 
-    public synchronized void add(int row, Host bookmark) {
-        bookmark.setFile(new Local(file, bookmark.getNickname() + ".duck"));
-        try {
-            bookmark.write();
-        }
-        catch(IOException e) {
-            log.error(e.getMessage());
-            return;
-        }
+    /**
+     * @param bookmark
+     * @return
+     */
+    public Local getFile(Host bookmark) {
+        return LocalFactory.createLocal(file, bookmark.getNickname() + ".duck");
+    }
+
+    @Override
+    public void add(int row, Host bookmark) {
+        HostWriterFactory.instance().write(bookmark, this.getFile(bookmark));
         if(!this.contains(bookmark)) {
             super.add(row, bookmark);
         }
@@ -76,36 +77,34 @@ public class HistoryCollection extends HostCollection {
      * @param row
      * @return the element that was removed from the list.
      */
-    public synchronized Host remove(int row) {
-        final Host bookmark = this.get(row);
-        bookmark.getFile().delete(false);
+    @Override
+    public Host remove(int row) {
+        this.getFile(this.get(row)).delete(false);
         return super.remove(row);
     }
 
-    protected void load() {
+    @Override
+    public void load() {
         log.info("Reloading " + file);
-        final AttributedList<Local> bookmarks = file.childs(new NullComparator<Local>(),
+        final AttributedList<Local> bookmarks = file.childs(
                 new PathFilter<Local>() {
                     public boolean accept(Local file) {
                         return file.getName().endsWith(".duck");
                     }
                 }
         );
-        for(Local next: bookmarks) {
-            try {
-                super.add(this.size(), new Host(next));
-            }
-            catch(IOException e) {
-                log.error(e.getMessage());
-            }
+        final Reader<Host> reader = HostReaderFactory.instance();
+        for(Local next : bookmarks) {
+            super.add(this.size(), reader.read(next));
         }
     }
 
+    @Override
     protected void sort() {
         Collections.sort(this, new Comparator<Host>() {
             public int compare(Host o1, Host o2) {
-                Local f1 = o1.getFile();
-                Local f2 = o2.getFile();
+                Local f1 = getFile(o1);
+                Local f2 = getFile(o2);
                 if(f1.attributes.getModificationDate() < f2.attributes.getModificationDate()) {
                     return 1;
                 }
@@ -117,26 +116,31 @@ public class HistoryCollection extends HostCollection {
         });
     }
 
-    public synchronized void clear() {
+    @Override
+    public void clear() {
         log.debug("Removing all bookmarks from " + file);
-        for(Host next: this) {
-            next.getFile().delete(false);
+        for(Host next : this) {
+            this.getFile(next).delete(false);
         }
         super.clear();
     }
 
+    @Override
     public void save() {
         // Do not save collection
     }
 
+    @Override
     protected Host unique(Host bookmark) {
         return bookmark;
     }
 
+    @Override
     public boolean allowsAdd() {
         return false;
     }
 
+    @Override
     public boolean allowsEdit() {
         return false;
     }

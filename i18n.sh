@@ -16,8 +16,10 @@
 
 #!/bin/bash
 
+# From Xcode 2.5 Developer Tools installation
 nibtool="nibtool"
 base_language="en.lproj"
+arch="i386"
 
 usage() {
 	echo ""
@@ -87,7 +89,7 @@ open() {
 
 run() {
 	echo "Running app using `basename $language .lproj`...";
-	./build/Deployment/Cyberduck.app/Contents/MacOS/Cyberduck -AppleLanguages "(`basename $language .lproj`)"
+	arch -arch $arch ./build/Release/Cyberduck.app/Contents/MacOS/Cyberduck -AppleLanguages "(`basename $language .lproj`)"
 }
 
 extractstrings() {
@@ -266,6 +268,12 @@ while [ "$1" != "" ] # When there are arguments...
 				echo "*** DONE. ***";
 				exit 0;
 			;; 
+			--arch)
+				shift;
+				arch=$1;
+				echo "Running architecture:$arch";
+				shift;
+			;;
 			--test)
 				test;
 				echo "*** DONE. ***";

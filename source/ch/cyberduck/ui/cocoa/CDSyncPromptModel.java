@@ -18,17 +18,16 @@ package ch.cyberduck.ui.cocoa;
  *  dkocher@cyberduck.ch
  */
 
-import com.apple.cocoa.application.NSImage;
-import com.apple.cocoa.foundation.NSAttributedString;
-
 import ch.cyberduck.core.*;
+import ch.cyberduck.ui.cocoa.foundation.NSAttributedString;
+import ch.cyberduck.ui.cocoa.foundation.NSObject;
 
 /**
  * @version $Id$
  */
 public class CDSyncPromptModel extends CDTransferPromptModel {
 
-    public CDSyncPromptModel(CDWindowController c, Transfer transfer) {
+    public CDSyncPromptModel(CDTransferPrompt c, Transfer transfer) {
         super(c, transfer);
     }
 
@@ -38,9 +37,11 @@ public class CDSyncPromptModel extends CDTransferPromptModel {
      */
     private PathFilter<Path> filter;
 
+    @Override
     protected PathFilter<Path> filter() {
         if(null == filter) {
             filter = new PromptFilter() {
+                @Override
                 public boolean accept(Path child) {
                     log.debug("accept:" + child);
                     return super.accept(child);
@@ -59,32 +60,34 @@ public class CDSyncPromptModel extends CDTransferPromptModel {
      */
     protected static final String CREATE_COLUMN = "CREATE";
 
-    protected Object objectValueForItem(final Path item, final String identifier) {
-        if(null != item) {
+    @Override
+    protected NSObject objectValueForItem(final Path item, final String identifier) {
+        final NSObject cached = tableViewCache.get(item, identifier);
+        if(null == cached) {
             if(identifier.equals(SIZE_COLUMN)) {
-                SyncTransfer.Comparison compare = ((SyncTransfer)transfer).compare(item);
-                return new NSAttributedString(Status.getSizeAsString(
+                SyncTransfer.Comparison compare = ((SyncTransfer) transfer).compare(item);
+                return tableViewCache.put(item, identifier, NSAttributedString.attributedStringWithAttributes(Status.getSizeAsString(
                         compare.equals(SyncTransfer.COMPARISON_REMOTE_NEWER) ? item.attributes.getSize() : item.getLocal().attributes.getSize()),
-                        CDTableCellAttributes.browserFontRightAlignment());
+                        CDTableCellAttributes.browserFontRightAlignment()));
             }
             if(identifier.equals(SYNC_COLUMN)) {
-                SyncTransfer.Comparison compare = ((SyncTransfer)transfer).compare(item);
+                SyncTransfer.Comparison compare = ((SyncTransfer) transfer).compare(item);
                 if(compare.equals(SyncTransfer.COMPARISON_REMOTE_NEWER)) {
-                    return CDIconCache.instance().iconForName("arrowDown", 16);
+                    return CDIconCache.iconNamed("arrowDown", 16);
                 }
                 if(compare.equals(SyncTransfer.COMPARISON_LOCAL_NEWER)) {
-                    return CDIconCache.instance().iconForName("arrowUp", 16);
+                    return CDIconCache.iconNamed("arrowUp", 16);
                 }
-                return null;
+                return tableViewCache.put(item, identifier, null);
             }
             if(identifier.equals(WARNING_COLUMN)) {
                 if(item.attributes.isFile()) {
-                    if(transfer.exists(item)) {
+                    if(item.exists()) {
                         if(item.attributes.getSize() == 0) {
                             return ALERT_ICON;
                         }
                     }
-                    if(transfer.exists(item.getLocal())) {
+                    if(item.getLocal().exists()) {
                         if(item.getLocal().attributes.getSize() == 0) {
                             return ALERT_ICON;
                         }
@@ -93,8 +96,8 @@ public class CDSyncPromptModel extends CDTransferPromptModel {
                 return null;
             }
             if(identifier.equals(CREATE_COLUMN)) {
-                if(!(transfer.exists(item) && transfer.exists(item.getLocal()))) {
-                    return CDIconCache.instance().iconForName("plus", 16);
+                if(!(item.exists() && item.getLocal().exists())) {
+                    return CDIconCache.iconNamed("plus", 16);
                 }
                 return null;
             }
