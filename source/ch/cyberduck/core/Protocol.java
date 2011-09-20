@@ -1347,4 +1347,62 @@ public abstract class Protocol {
             return DropboxPath.factory();
         }
     };
+
+    public static final Protocol GREENQLOUD_SSL = new Protocol() {
+        @Override
+        public String getName() {
+            return "SQ";
+        }
+
+        @Override
+        public String getDescription() {
+            return Locale.localizedString("Greenqloud Storage Qloud", "SQ");
+        }
+
+        @Override
+        public String getIdentifier() {
+            return "gq";
+        }
+
+        @Override
+        public String getDefaultHostname() {
+            return "s.greenqloud.com";
+        }
+
+        @Override
+        public int getDefaultPort() {
+            return 443;
+        }
+
+        @Override
+        public String getScheme() {
+            return "https";
+        }
+
+        @Override
+        public String[] getSchemes() {
+            return new String[]{this.getScheme(), "s3"};
+        }
+
+        @Override
+        public boolean isSecure() {
+            return true;
+        }
+
+        @Override
+        public boolean isHostnameConfigurable() {
+            return true;
+        }
+
+        @Override
+        public String disk() {
+            return S3_SSL.disk();
+        }
+
+        @Override
+        public String icon() {
+            return "greenqloud-icon";
+        }
+    };
+
 }
